@@ -15,13 +15,13 @@
 3. 原声文件保持不可变；移调、增益和包络只写入播放事件。
 4. 后续替换资产时必须同时更新 manifest、SHA-256、时长和许可引用。
 
-## 正式 AI
+## AI 接入状态
 
-以真实 adapter 实现 `PolishGenerationPort`，再在 `src/app/CompositionRoot.tsx` 替换 `MockPolishGenerator`。必须保持：
+当前 `CompositionRoot` 已接入真实的 `FunMusicPolishGenerator` 和 `HybridCompositionAdvisor`。`MockPolishGenerator` 仅保留为开发测试适配器，不再是公开版本的默认路径。联网模型通过服务端环境变量启用，未配置或调用失败时使用明确标记的本地降级结果。后续替换模型仍必须保持：
 
 - `live_ai`、`cached_demo_ai`、`local_fallback` 三种来源真实标记；
 - 原声和 AI 背景进入独立 bus；
 - AI 失败不阻塞作品保存；
 - 无歌词、无人声、无抢占性主旋律约束。
 
-确认所有正式数据接入后，可删除 `src/mocks/mockData.ts` 和 `src/services/mock/`。
+`src/mocks/mockData.ts` 目前仍提供演示声卡、示例声音元数据和初始化快照；这些属于公开说明的示例数据，不代表实时模型输出。正式学校部署时应替换初始化示例，并保留来源与授权字段。
