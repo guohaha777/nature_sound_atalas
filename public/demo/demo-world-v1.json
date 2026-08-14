@@ -1,0 +1,21 @@
+{
+  "manifestVersion": "demo-world-v1",
+  "projectId": "demo-project",
+  "paperCardPolicy": {
+    "maxSoundEntries": 3,
+    "templateVersion": "paper-sound-card-v1"
+  },
+  "emotionPolicy": {
+    "scope": "composition",
+    "optional": true,
+    "mappingVersion": "emotion-mapping-v1"
+  },
+  "audioAssets": [
+    { "id": "audio-cow", "label": "牛", "path": "/demo/audio/cow.mp3", "durationMs": 1254, "sha256": "77565a6a210c487846c43068cd90f70e9b9625e85efe5d3a638ab48a3bcfaac0" },
+    { "id": "audio-wind", "label": "风", "path": "/demo/audio/wind.mp3", "durationMs": 18991, "sha256": "b75ba153778a0b9ce4c68b3feab43da37eb26a5c9433389fd8c5ce3d4af6a0ad" },
+    { "id": "audio-forest-bird", "label": "树林里的鸟叫", "path": "/demo/audio/forest-bird.mp3", "durationMs": 59455, "sha256": "f72f194cc0317032386f75190412ec2ea23484a1b9cd120e97de66596c3f8e85" },
+    { "id": "audio-falling-apple", "label": "苹果落地", "path": "/demo/audio/falling-apple.mp3", "durationMs": 3657, "sha256": "c48330fa9482fe2618456df7af0019d75adaeb90c3dc7b513cbc3f3654fb9389" },
+    { "id": "audio-bicycle", "label": "自行车", "path": "/demo/audio/bicycle.mp3", "durationMs": 5669, "sha256": "803c4157eb7709566df8ac1116115ebf5f9dc2210ba5f41b54a42031aa3508f8" }
+  ],
+  "licenseRef": "user-provided-demo-audio:public-use-confirmed-2026-08-10"
+}

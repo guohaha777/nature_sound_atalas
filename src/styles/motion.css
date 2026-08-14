@@ -1,0 +1,17 @@
+@keyframes floatCreature { 0%, 100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-10px) rotate(1deg); } }
+@keyframes soundWave { 0% { opacity: 0; transform: scale(.6); } 35% { opacity: .8; } 100% { opacity: 0; transform: scale(1.5); } }
+@keyframes breathe { 0%, 100% { transform: scale(1); opacity: .45; } 50% { transform: scale(1.08); opacity: .75; } }
+@keyframes shimmer { to { background-position: 200% center; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .sound-creature.is-active .sound-creature__body { animation: floatCreature 1.2s var(--ease-bounce) infinite; }
+  .sound-creature__waves i { animation: soundWave 1.6s ease-out infinite; }
+  .sound-creature__waves i:nth-child(2) { animation-delay: .35s; }
+  .sound-creature__waves i:nth-child(3) { animation-delay: .7s; }
+  .polish-panel.is-ready .polish-orb { animation: breathe 3s ease-in-out infinite; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
