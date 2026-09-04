@@ -53,6 +53,7 @@ export const compositionSchema = z.object({
     sourceClipVersion: z.literal("source-clip-v1").optional(),
     sourceClipOrigin: z.enum(["full-source", "user"]).optional(),
     sourceSelectionDurationSeconds: z.number().positive().optional(),
+    lane: z.number().int().nonnegative().optional(),
     generatedBy: z.enum(["natural-sound-continuity-v1", "deterministic-arranger-v2"]).optional(),
     arrangementRole: z.enum(["lead-natural", "rhythmic-anchor", "texture", "response", "accent"]).optional(),
     section: z.enum(["opening", "development", "peak", "ending"]).optional(),

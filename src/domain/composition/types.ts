@@ -24,6 +24,8 @@ export interface CompositionEvent {
   sourceClipOrigin?: "full-source" | "user";
   /** 原声时间轴上的选区长度；与编排片段的播放长度分开保存。 */
   sourceSelectionDurationSeconds?: number;
+  /** 画在编排面板的第几行。纯布局，不影响声音；旧事件缺省时按移调量反推。 */
+  lane?: number;
   /** Phase 01 为保证自然声贯穿而补充的事件，可在重新规划时安全替换。 */
   generatedBy?: "natural-sound-continuity-v1" | "deterministic-arranger-v2";
   arrangementRole?: "lead-natural" | "rhythmic-anchor" | "texture" | "response" | "accent";

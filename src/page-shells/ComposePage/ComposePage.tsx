@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useExperience } from "@/src/app";
 import { FIELD_LABELS } from "@/src/domain/sound-card";
+import { laneCountFor, laneOfEvent, laneTopPercent } from "@/src/domain/composition";
 import { AudioTransport, LayerToggle } from "@/src/components/audio";
 import { PageShell } from "@/src/components/navigation";
 import { isUserAddedSound, SoundCreature, SoundIdentityGlyph } from "@/src/components/sound";
@@ -10,12 +11,10 @@ import { buildCompositionPlaybackTimeline } from "@/src/features/composition-pla
 import { resolveEmotionSelection } from "@/src/features/composition-emotion";
 import { startPageTransition, usePageRouter } from "@/src/features/page-transition";
 import { COMPOSITION_DURATION_LABELS, COMPOSITION_DURATION_OPTIONS, compositionBeatLength } from "@/src/features/composition-duration";
-import { pitchBandFromSemitoneShift } from "@/src/domain/music-mapping/mappingRulesV1";
 import { durationOptionFitsUserClips, minimumCompositionSecondsForUserClips } from "@/src/features/sound-world";
 import { GenerationProgress } from "@/src/components/feedback";
 import { DEFAULT_COMPOSITION_DURATION_SECONDS } from "@/src/domain/composition";
 
-const PITCH_Y = { high: 19, mid: 50, low: 80 } as const;
 const INTENSITY_SIZE = { soft: 18, medium: 24, loud: 31 } as const;
 const PIPELINE = ["声音档案", "选择素材", "参数处理", "可选情绪", "规则编排", "独立 AI 层", "生成作品"];
 const DISCOVERY_TITLES = {
@@ -57,7 +56,8 @@ export function ComposePage() {
   const timeline = useMemo(() => buildCompositionPlaybackTimeline(composition, audioAssets, composition ? compositionBeatLength(composition) : 24), [audioAssets, composition]);
   const maxBeat = timeline.maxBeat;
   const minimumUserClipSeconds = minimumCompositionSecondsForUserClips(composition);
-  const events = composition?.events ?? [];
+  const events = useMemo(() => composition?.events ?? [], [composition]);
+  const laneCount = laneCountFor(events);
   const currentBeat = playback.currentTime * ((composition?.bpm ?? 88) / 60);
   const playheadLeft = 6 + Math.min(1, currentBeat / maxBeat) * 88;
   const compositionPlayback = playback.status === "playing" || playback.status === "paused" || playback.status === "ended" || playback.status === "loading"
@@ -132,14 +132,13 @@ export function ComposePage() {
           </header>
 
           <div className="sound-score" aria-label="声音声谱">
-            {(["high", "mid", "low"] as const).map((pitch) => <div className={`sound-score__axis sound-score__axis--${pitch}`} key={pitch}><span>{pitch === "high" ? "HIGH 高" : pitch === "mid" ? "MID 中" : "LOW 低"}</span></div>)}
+            {Array.from({ length: laneCount }, (_, lane) => <div className="sound-score__axis" style={{ top: `${laneTopPercent(lane, laneCount)}%` }} key={lane} />)}
             {events.map((event) => {
               const unit = units.find((item) => item.id === event.soundUnitId);
               const card = cards.find((item) => item.id === unit?.cardId);
               const asset = audioAssets.find((item) => item.id === event.audioAssetId);
               if (!card || !unit) return null;
               const playing = playback.activeCompositionEventIds.includes(event.id);
-              const pitch = pitchBandFromSemitoneShift(event.semitoneShift);
               // 谱面左右各留 6% 边距：left 从 6% 起算，最远只能画到 94%。
               const startPercent = 6 + (event.startBeat / maxBeat) * 88;
               const remainingPercent = Math.max(0, 94 - startPercent);
@@ -147,7 +146,7 @@ export function ComposePage() {
                 ? INTENSITY_SIZE[unit.parameters.intensity]
                 : `min(max(${INTENSITY_SIZE[unit.parameters.intensity]}px, ${(event.durationBeats / maxBeat) * 88}%), ${remainingPercent}%)`;
               const displayName = card.displayName ?? card.source.label;
-              return <div className={`score-note score-note--capsule ${playing ? "is-playing" : ""}`} style={{ left: `${startPercent}%`, top: `${PITCH_Y[pitch]}%`, width: capsuleWidth, height: INTENSITY_SIZE[unit.parameters.intensity], background: card.color } as React.CSSProperties} title={`${card.owner} · ${displayName} · ${emotionSelection?.keyword ?? "未选择情绪"}`} key={event.id}><SoundIdentityGlyph userAdded={isUserAddedSound(unit, asset)}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={playing} size="small" /></SoundIdentityGlyph></div>;
+              return <div className={`score-note score-note--capsule ${playing ? "is-playing" : ""}`} style={{ left: `${startPercent}%`, top: `${laneTopPercent(laneOfEvent(event), laneCount)}%`, width: capsuleWidth, height: INTENSITY_SIZE[unit.parameters.intensity], background: card.color } as React.CSSProperties} title={`${card.owner} · ${displayName} · ${emotionSelection?.keyword ?? "未选择情绪"}`} key={event.id}><SoundIdentityGlyph userAdded={isUserAddedSound(unit, asset)}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={playing} size="small" /></SoundIdentityGlyph></div>;
             })}
             <div className="score-playhead" style={{ left: `${playheadLeft}%` }} />
             <span className="sound-score__time">完整作品 {Math.ceil(timeline.audibleDurationSeconds)} 秒</span>

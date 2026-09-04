@@ -1,5 +1,5 @@
 import type { OriginalAudioAsset } from "@/src/domain/audio-asset";
-import { arrangeCompositionV2, DEFAULT_COMPOSITION_DURATION_SECONDS, type Composition, type CompositionEvent } from "@/src/domain/composition";
+import { arrangeCompositionV2, DEFAULT_COMPOSITION_DURATION_SECONDS, laneOfEvent, type Composition, type CompositionEvent } from "@/src/domain/composition";
 import { mapCardToMusicIntent } from "@/src/domain/music-mapping";
 import { PITCH_SHIFT, pitchBandFromSemitoneShift } from "@/src/domain/music-mapping/mappingRulesV1";
 import type { ConfirmedSoundCard, PitchChoice, SoundUnit } from "@/src/domain/sound-card";
@@ -139,16 +139,22 @@ export function selectWorldSoundUnits(
   };
 }
 
+/**
+ * 在编排面板里挪一个声音点。
+ *
+ * 行只决定画在哪一条线上，不再改 semitoneShift——孩子的高低在声音配方里已经选过，
+ * 挪位置通常只是想错开重叠，不该顺带把自己的录音升降三个半音。
+ * 同理不再因为「拖到最下面一行」就把它判成节奏支点。
+ */
 export function moveWorldCompositionEvent(
   composition: Composition,
   eventId: string,
-  patch: { startBeat?: number; pitch?: PitchChoice },
+  patch: { startBeat?: number; lane?: number },
 ): Composition {
   const events = composition.events.map((event) => event.id === eventId ? {
     ...event,
     startBeat: Math.max(0, Math.min(Math.max(0, composition.durationSeconds * composition.bpm / 60 - event.durationBeats), patch.startBeat ?? event.startBeat)),
-    semitoneShift: patch.pitch ? PITCH_SHIFT[patch.pitch] : event.semitoneShift,
-    arrangementRole: patch.pitch === "low" ? "rhythmic-anchor" as const : event.arrangementRole,
+    lane: patch.lane ?? laneOfEvent(event),
     section: sectionFromBeat(patch.startBeat ?? event.startBeat, composition.durationSeconds * composition.bpm / 60),
   } : event).sort((a, b) => a.startBeat - b.startBeat);
   return { ...composition, events, revision: composition.revision + 1 };

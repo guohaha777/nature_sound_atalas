@@ -64,12 +64,13 @@ describe("sound world arrangement", () => {
     const units = MOCK_SOUND_UNITS.map((unit, index) => ({ ...unit, active: index === 0 }));
     const composition = arrangeCompositionV1(MOCK_SOUND_CARDS, units, 1);
     const source = composition.events[0];
-    const moved = moveWorldCompositionEvent(composition, source.id, { startBeat: 7.5, pitch: "high" });
-    expect(moved.events.find((event) => event.id === source.id)).toMatchObject({ startBeat: 7.5, semitoneShift: 3 });
+    const moved = moveWorldCompositionEvent(composition, source.id, { startBeat: 7.5, lane: 0 });
+    // 换行只改画在哪一条线上；孩子的高低在声音配方里已经定了，挪位置不该动移调量。
+    expect(moved.events.find((event) => event.id === source.id)).toMatchObject({ startBeat: 7.5, lane: 0, semitoneShift: source.semitoneShift });
     const copied = duplicateWorldCompositionEvent(moved, source.id);
     expect(copied.events.filter((event) => event.soundUnitId === source.soundUnitId)).toHaveLength(moved.events.filter((event) => event.soundUnitId === source.soundUnitId).length + 1);
     const copy = copied.events.find((event) => event.id.startsWith(`${source.id}-copy-`));
-    expect(copy).toMatchObject({ startBeat: 7.5, semitoneShift: 3 });
+    expect(copy).toMatchObject({ startBeat: 7.5, lane: 0, semitoneShift: source.semitoneShift });
     expect(deleteWorldCompositionEvent(copied, copy!.id).events).toEqual(moved.events);
   });
 });

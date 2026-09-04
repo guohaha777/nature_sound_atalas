@@ -85,7 +85,7 @@ interface ExperienceContextValue {
   toggleUnit(id: string): void;
   setActiveUnits(ids: string[]): void;
   updateWorldArrangement(soundUnitId: string, patch: Partial<WorldArrangementValues>): void;
-  moveWorldEvent(eventId: string, patch: { startBeat?: number; pitch?: PitchChoice }): void;
+  moveWorldEvent(eventId: string, patch: { startBeat?: number; lane?: number }): void;
   duplicateWorldEvent(eventId: string): void;
   deleteWorldEvent(eventId: string): void;
   updateWorldEventClip(eventId: string, selection: { startSeconds: number; endSeconds: number }, options?: { expandWorkToFit?: boolean }): void;

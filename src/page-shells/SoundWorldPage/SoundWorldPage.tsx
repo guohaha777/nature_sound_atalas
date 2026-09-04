@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEven
 import { useSearchParams } from "next/navigation";
 import { useExperience } from "@/src/app";
 import { DEFAULT_COMPOSITION_DURATION_SECONDS } from "@/src/domain/composition";
-import { FIELD_LABELS, INPUT_MODE_LABELS, type PitchChoice } from "@/src/domain/sound-card";
-import { pitchBandFromSemitoneShift } from "@/src/domain/music-mapping/mappingRulesV1";
+import { FIELD_LABELS, INPUT_MODE_LABELS } from "@/src/domain/sound-card";
+import { DEFAULT_LANE_COUNT, laneCountFor, laneOfEvent, laneTopPercent, MAX_LANE_COUNT } from "@/src/domain/composition";
 import { listEligibleSoundWorldItems, listOversizedSourceEvents, readEventSourceClip, selectedPaperCardUnitIds, WORLD_LAST_BEAT } from "@/src/features/sound-world";
 import { clampEmotionCoordinate, resolveEmotionSelection } from "@/src/features/composition-emotion";
 import { buildCompositionPlaybackTimeline } from "@/src/features/composition-playback";
@@ -18,9 +18,8 @@ import { usePageRouter } from "@/src/features/page-transition";
 import { parseLibrarySelection, selectedLibraryUnitIds } from "@/src/features/library-selection/librarySelection";
 
 type Scope = "mine" | "class";
-type EventPlacement = { eventId: string; startBeat: number; pitch: PitchChoice };
+type EventPlacement = { eventId: string; startBeat: number; lane: number };
 
-const PITCH_TOP = { high: 18, mid: 49, low: 78 } as const;
 
 export function SoundWorldPage() {
   const router = usePageRouter();
@@ -30,7 +29,7 @@ export function SoundWorldPage() {
   const fieldRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<{ eventId: string; pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
   const draggedEventRef = useRef<string | null>(null);
-  const pendingDropRef = useRef<{ unitId: string; startBeat: number; pitch: PitchChoice } | null>(null);
+  const pendingDropRef = useRef<{ unitId: string; startBeat: number; lane: number } | null>(null);
   const eligibleItems = useMemo(() => listEligibleSoundWorldItems(cards, units, audioAssets), [audioAssets, cards, units]);
   const owners = useMemo(() => Array.from(new Set(eligibleItems.map((item) => (item.card as MockSoundCard).owner).filter((name) => name !== "系统"))), [eligibleItems]);
   const focusCardId = search.get("focus");
@@ -43,6 +42,8 @@ export function SoundWorldPage() {
   const [openEventMenu, setOpenEventMenu] = useState<string | null>(null);
   const [clipEditorEventId, setClipEditorEventId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<EventPlacement | null>(null);
+  /** 三条线不够错开时，老师可以再加。行只是布局，加行不影响任何声音。 */
+  const [addedLanes, setAddedLanes] = useState(0);
   const [scorePlaybackActive, setScorePlaybackActive] = useState(false);
   const [emotionDialogOpen, setEmotionDialogOpen] = useState(false);
   const [draftEmotion, setDraftEmotion] = useState({ valence: 0, arousal: 0 });
@@ -78,7 +79,7 @@ export function SoundWorldPage() {
     if (!pendingDrop || !composition) return;
     const event = composition.events.find((item) => item.soundUnitId === pendingDrop.unitId);
     if (!event) return;
-    moveWorldEvent(event.id, { startBeat: pendingDrop.startBeat, pitch: pendingDrop.pitch });
+    moveWorldEvent(event.id, { startBeat: pendingDrop.startBeat, lane: pendingDrop.lane });
     pendingDropRef.current = null;
   }, [composition, moveWorldEvent]);
 
@@ -96,6 +97,7 @@ export function SoundWorldPage() {
     && event.generatedBy !== "deterministic-arranger-v2"
     && event.generatedBy !== "natural-sound-continuity-v1"
   )) ?? [];
+  const laneCount = Math.min(MAX_LANE_COUNT, Math.max(laneCountFor(scoreEvents), DEFAULT_LANE_COUNT + addedLanes));
   const historyItems = eligibleItems.filter((item) => isUserAddedSound(item.unit, item.asset));
   const systemItems = eligibleItems.filter((item) => !isUserAddedSound(item.unit, item.asset));
   const selectedArchiveItem = eligibleItems.find((item) => item.unit.id === selectedUnitId || item.card.id === selectedUnitId) ?? null;
@@ -132,7 +134,8 @@ export function SoundWorldPage() {
     const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
     return {
       startBeat: Math.round(x * worldMaxBeat * 2) / 2,
-      pitch: (y < 0.33 ? "high" : y < 0.66 ? "mid" : "low") as PitchChoice,
+      // 纵向只决定落在第几行；行是布局，不再改变声音的高低。
+      lane: Math.max(0, Math.min(laneCount - 1, Math.floor(y * laneCount))),
     };
   };
   const addDroppedSound = (event: DragEvent<HTMLElement>) => {
@@ -260,8 +263,9 @@ export function SoundWorldPage() {
       <div className="sound-field-layout sound-field-layout--editor">
         <div className="world-editor">
           <section ref={fieldRef} className="sound-field sound-field--direct" aria-label="可直接拖动的声音编排声场" onDragOver={(event) => event.preventDefault()} onDrop={addDroppedSound}>
-            {(["high", "mid", "low"] as const).map((pitch) => <div className={`sound-field__axis sound-field__axis--${pitch}`} key={pitch}><span>{pitch === "high" ? "HIGH 高" : pitch === "mid" ? "MID 中" : "LOW 低"}</span></div>)}
-            <span className="sound-field__time">先出现 ← 直接拖动时间位置 → 后出现</span>
+            {Array.from({ length: laneCount }, (_, lane) => <div className="sound-field__axis" style={{ top: `${laneTopPercent(lane, laneCount)}%` }} key={lane} />)}
+            {laneCount < MAX_LANE_COUNT && <button type="button" className="sound-field__add-lane" onClick={() => setAddedLanes((count) => count + 1)} aria-label="再加一条摆放线">＋ 加一条线</button>}
+            <span className="sound-field__time">先出现 ← 左右拖动决定顺序 → 后出现 · 上下换行只为错开，不改变声音</span>
             {scorePlaybackActive && <div className="world-playhead" style={{ left: `${scorePlayheadLeft}%` }} aria-hidden="true" />}
             {tailPlaying && <span className="world-tail-status">触发线已到终点 · 正在完整播放尾音</span>}
             {scoreEvents.map((scoreEvent) => {
@@ -271,7 +275,7 @@ export function SoundWorldPage() {
               const displayName = card.displayName ?? card.source.label;
               const preview = dragPreview?.eventId === scoreEvent.id ? dragPreview : null;
               const startBeat = preview?.startBeat ?? scoreEvent.startBeat;
-              const pitch = preview?.pitch ?? pitchBandFromSemitoneShift(scoreEvent.semitoneShift);
+              const lane = preview ? preview.lane : laneOfEvent(scoreEvent);
               const samePosition = scoreEvents.filter((candidate) => candidate.id !== scoreEvent.id && candidate.startBeat === scoreEvent.startBeat && candidate.semitoneShift === scoreEvent.semitoneShift);
               const overlapIndex = samePosition.filter((candidate) => candidate.id < scoreEvent.id).length;
               const occurrenceIndex = scoreEvents.filter((candidate) => candidate.soundUnitId === scoreEvent.soundUnitId).findIndex((candidate) => candidate.id === scoreEvent.id) + 1;
@@ -280,7 +284,7 @@ export function SoundWorldPage() {
               const capsuleWidthPercent = Math.min(88, sourceClip.durationSeconds / Math.max(1, composition?.durationSeconds ?? DEFAULT_COMPOSITION_DURATION_SECONDS) * 88);
               const preferredLeft = `calc(${6 + (startBeat / worldMaxBeat) * 88}% + ${overlapIndex * 10}px)`;
               const userAdded = isUserAddedSound(item.unit, item.asset);
-              return <article className={`field-being field-occurrence is-included ${activeSound ? "is-playing" : ""}`} style={{ left: `clamp(12px, ${preferredLeft}, calc(100% - var(--being-width) - 12px))`, top: `${PITCH_TOP[pitch]}%`, "--being-color": card.color, "--being-width": `clamp(44px, ${capsuleWidthPercent}%, calc(100% - 24px))`, "--being-height": "58px" } as React.CSSProperties} key={scoreEvent.id}>
+              return <article className={`field-being field-occurrence is-included ${activeSound ? "is-playing" : ""}`} style={{ left: `clamp(12px, ${preferredLeft}, calc(100% - var(--being-width) - 12px))`, top: `${laneTopPercent(lane, laneCount)}%`, "--being-color": card.color, "--being-width": `clamp(44px, ${capsuleWidthPercent}%, calc(100% - 24px))`, "--being-height": "58px" } as React.CSSProperties} key={scoreEvent.id}>
                 <button className="field-being__body" onPointerDown={(event) => startEventDrag(event, scoreEvent.id)} onPointerMove={moveEventDrag} onPointerUp={finishEventDrag} onPointerCancel={finishEventDrag} onClick={(event) => { event.stopPropagation(); if (draggedEventRef.current === scoreEvent.id) { draggedEventRef.current = null; return; } setClipEditorEventId(scoreEvent.id); }} aria-label={`拖动${displayName}或点击编辑声音片段，第${occurrenceIndex}次出现`}><SoundIdentityGlyph userAdded={userAdded}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={activeSound} size="small" /></SoundIdentityGlyph></button>
                 <span>{displayName} · {sourceClip.durationSeconds.toFixed(1)}秒</span>
                 <button className="field-being__menu-trigger" onClick={(event) => { event.stopPropagation(); setOpenEventMenu(openEventMenu === scoreEvent.id ? null : scoreEvent.id); }} aria-label={`编辑${displayName}的这个声音点`}>•••</button>
