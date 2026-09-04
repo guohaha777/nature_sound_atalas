@@ -1,5 +1,14 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { buildSymbolicMusicPlanPrompt, musicPolishBriefSchema, symbolicMusicPlanApiResponseSchema } from "@/src/features/music-polish";
+import { admitRequest } from "@/src/services/api-rate-limit";
+import {
+  derivePitchMaterial,
+  developMusicIdea,
+  musicIdeaSchema,
+  musicPolishBriefSchema,
+  repairSymbolicMusicPlan,
+  symbolicMusicPlanApiResponseSchema,
+} from "@/src/features/music-polish";
+import { buildMusicIdeaPrompt, JSON_ONLY_SYSTEM_MESSAGE } from "@/src/prompts";
 import { symbolicMusicPlanSchema } from "@/src/domain/composition";
 
 export async function POST(request: Request) {
@@ -17,7 +26,7 @@ export async function POST(request: Request) {
     if (!user || user.userId !== allowedUserId) return Response.json({ message: "当前访客没有使用智能编排额度的权限。" }, { status: 403 });
   }
 
-  const admission = admitPlan(request);
+  const admission = admitRequest(request, PLAN_RATE_LIMIT);
   if (!admission.ok) return Response.json({ message: admission.message }, { status: 429, headers: { "Retry-After": String(admission.retryAfterSeconds) } });
   try {
     const upstream = await fetch(endpoint, {
@@ -26,9 +35,10 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: "只返回合法 JSON，不要返回 Markdown。" },
-          { role: "user", content: buildSymbolicMusicPlanPrompt(parsed.data) },
+          { role: "system", content: JSON_ONLY_SYSTEM_MESSAGE },
+          { role: "user", content: buildMusicIdeaPrompt(parsed.data) },
         ],
+        response_format: { type: "json_object" },
         enable_thinking: false,
         temperature: 0.35,
       }),
@@ -37,11 +47,30 @@ export async function POST(request: Request) {
     const payload = await upstream.json().catch(() => null) as OpenAICompatibleResponse | null;
     const content = payload?.choices?.[0]?.message?.content;
     if (!upstream.ok || typeof content !== "string") return Response.json({ message: "智能音符编排没有返回有效结果。" }, { status: 502 });
-    const plan = symbolicMusicPlanSchema.safeParse(JSON.parse(stripCodeFence(content)));
-    if (!plan.success || plan.data.durationSeconds !== parsed.data.durationSeconds || plan.data.bpm !== parsed.data.bpm) {
-      return Response.json({ message: "智能音符编排没有通过时长与安全校验。" }, { status: 502 });
+    const decoded = JSON.parse(stripCodeFence(content)) as unknown;
+    // 模型只写想法，程序做发展：重复、变形、留白与收尾都由确定性规则完成。
+    const idea = musicIdeaSchema.safeParse(normalizeIdea(decoded));
+    if (!idea.success) {
+      const issue = idea.error.issues[0];
+      return Response.json({ message: `音乐想法不完整：${issue.path.join(".") || "根对象"} ${issue.message}` }, { status: 502 });
     }
-    return Response.json(symbolicMusicPlanApiResponseSchema.parse({ plan: plan.data, provider: new URL(endpoint).hostname, model }));
+    const developed = developMusicIdea(idea.data, parsed.data, derivePitchMaterial(parsed.data));
+    // 发展出来的方案仍然过一遍修补，兜住越界与收尾的边缘情况。
+    const repaired = repairSymbolicMusicPlan(developed.plan, parsed.data);
+    if (!repaired.plan) {
+      return Response.json({ message: `智能音符编排无法使用：${repaired.repairs.at(-1) ?? "返回内容不是音符方案"}。` }, { status: 502 });
+    }
+    const plan = symbolicMusicPlanSchema.safeParse(repaired.plan);
+    if (!plan.success) {
+      const issue = plan.error.issues[0];
+      return Response.json({ message: `智能音符编排修补后仍不合规：${issue.path.join(".") || "根对象"} ${issue.message}` }, { status: 502 });
+    }
+    return Response.json(symbolicMusicPlanApiResponseSchema.parse({
+      plan: plan.data,
+      provider: new URL(endpoint).hostname,
+      model,
+      repairs: repaired.repairs,
+    }));
   } catch (error) {
     return Response.json({ message: error instanceof DOMException && error.name === "TimeoutError" ? "智能音符编排超时。" : "暂时无法连接智能音符编排服务。" }, { status: 502 });
   } finally {
@@ -49,41 +78,17 @@ export async function POST(request: Request) {
   }
 }
 
-type PlanRateState = { day: string; dailyCount: number; attempts: Map<string, number[]>; active: number };
-const WINDOW_MS = 60 * 60 * 1000;
-const PER_CLIENT_LIMIT = 12;
-const DAILY_LIMIT = 120;
-const MAX_CONCURRENCY = 6;
-
-function planRateState(): PlanRateState {
-  const scope = globalThis as typeof globalThis & { __wanwuPlanRateState?: PlanRateState };
-  const day = new Date().toISOString().slice(0, 10);
-  if (!scope.__wanwuPlanRateState || scope.__wanwuPlanRateState.day !== day) scope.__wanwuPlanRateState = { day, dailyCount: 0, attempts: new Map(), active: 0 };
-  return scope.__wanwuPlanRateState;
-}
-
-function admitPlan(request: Request): { ok: true; release(): void } | { ok: false; message: string; retryAfterSeconds: number } {
-  const state = planRateState();
-  const client = clientIdentifier(request);
-  const now = Date.now();
-  const recent = (state.attempts.get(client) ?? []).filter((time) => now - time < WINDOW_MS);
-  if (recent.length >= PER_CLIENT_LIMIT) return { ok: false, message: "智能音符编排次数较多，请稍后再试。", retryAfterSeconds: 300 };
-  if (state.dailyCount >= DAILY_LIMIT) return { ok: false, message: "今日智能音符编排额度已用完，将使用本地动态方案。", retryAfterSeconds: 3600 };
-  if (state.active >= MAX_CONCURRENCY) return { ok: false, message: "当前智能音符编排任务较多，请稍后再试。", retryAfterSeconds: 20 };
-  recent.push(now);
-  state.attempts.set(client, recent);
-  state.dailyCount += 1;
-  state.active += 1;
-  let released = false;
-  return { ok: true, release: () => { if (!released) { released = true; state.active = Math.max(0, state.active - 1); } } };
-}
-
-function clientIdentifier(request: Request) {
-  return request.headers.get("cf-connecting-ip")?.trim()
-    || request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim()
-    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || "unknown-client";
-}
+const PLAN_RATE_LIMIT = {
+  scope: "music-plan",
+  perClientLimit: 12,
+  dailyLimit: 120,
+  maxConcurrency: 6,
+  messages: {
+    perClient: "智能音符编排次数较多，请稍后再试。",
+    daily: "今日智能音符编排额度已用完，将使用本地动态方案。",
+    concurrency: "当前智能音符编排任务较多，请稍后再试。",
+  },
+} as const;
 
 function isPublicHttpsEndpoint(value: string) {
   try {
@@ -99,6 +104,22 @@ function isPublicHttpsEndpoint(value: string) {
     return false;
   }
 }
+
+/** 模型偶尔会漏写 version 或把段落名写成中文，这些都不值得整份作废。 */
+function normalizeIdea(decoded: unknown): unknown {
+  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return decoded;
+  const source = decoded as Record<string, unknown>;
+  const sections = Array.isArray(source.sections)
+    ? source.sections.map((section, index) => {
+      if (typeof section !== "object" || section === null) return section;
+      const item = section as Record<string, unknown>;
+      return { ...item, name: SECTION_ORDER[index] ?? item.name };
+    })
+    : source.sections;
+  return { ...source, version: "music-idea-v1", sections };
+}
+
+const SECTION_ORDER = ["intro", "development", "peak", "ending"] as const;
 
 function stripCodeFence(value: string) {
   return value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");

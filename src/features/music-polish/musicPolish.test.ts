@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { arrangeCompositionV1 } from "@/src/domain/composition";
 import { MOCK_SOUND_CARDS, MOCK_SOUND_UNITS } from "@/src/mocks/mockData";
-import { buildFunMusicPromptV2, buildMusicPolishBrief, buildSymbolicMusicPlanPrompt, deriveMusicPolishDirection, musicPolishBriefSchema } from ".";
+import { buildFunMusicPromptV2, buildMusicIdeaPrompt } from "@/src/prompts";
+import { buildMusicPolishBrief, deriveMusicPolishDirection, musicPolishBriefSchema } from ".";
 
 describe("music polish prompt pipeline", () => {
   it("builds a valid anonymous brief from the composition", () => {
@@ -31,12 +32,30 @@ describe("music polish prompt pipeline", () => {
     expect(buildFunMusicPromptV2(brief)).toBe(buildFunMusicPromptV2(brief));
   });
 
-  it("asks the symbolic planner for structure and per-event responses", () => {
+  it("只向模型要音乐想法，把段落与音高材料交代清楚", () => {
     const composition = arrangeCompositionV1(MOCK_SOUND_CARDS, MOCK_SOUND_UNITS, 1);
-    const prompt = buildSymbolicMusicPlanPrompt(buildMusicPolishBrief(composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS));
-    expect(prompt).toContain("开头建立空间");
-    expect(prompt).toContain("留白处可以增加短动机");
-    expect(prompt).toContain("mallet");
+    const brief = buildMusicPolishBrief(composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS);
+    const prompt = buildMusicIdeaPrompt(brief);
+
+    expect(prompt).toContain("music-idea-v1");
+    expect(prompt).toContain("不要写完整的音符表");
+    expect(prompt).toContain("主音");
+    brief.sections.forEach((section) => expect(prompt).toContain(`${section.startSeconds}–${section.endSeconds} 秒`));
+    // 动机的质量要求是这次改动的重点，必须写进提示词。
+    expect(prompt).toContain("至少有一次跳进");
+    expect(prompt).toContain("经得起重复");
+  });
+
+  it("情绪坐标不同，给模型的指令也不同", () => {
+    const composition = arrangeCompositionV1(MOCK_SOUND_CARDS, MOCK_SOUND_UNITS, 1);
+    const base = buildMusicPolishBrief(composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS);
+    const bright = buildMusicIdeaPrompt({ ...base, emotionCoordinates: { enabled: true, valence: 0.8, arousal: 0.7 } });
+    const blue = buildMusicIdeaPrompt({ ...base, emotionCoordinates: { enabled: true, valence: -0.8, arousal: -0.7 } });
+
+    expect(bright).toContain("向上的跳进");
+    expect(bright).toContain("bassPulse 用 steady");
+    expect(blue).toContain("向下的级进");
+    expect(blue).toContain("bassPulse 用 none 或 slow");
   });
 
   it("creates a stronger direction for loud repeating sounds than soft fade-ins", () => {

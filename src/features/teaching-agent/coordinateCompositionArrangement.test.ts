@@ -7,6 +7,8 @@ describe("coordinateCompositionArrangement", () => {
     const ids = MOCK_SOUND_UNITS.slice(0, 2).map((unit) => unit.id);
     const result = coordinateCompositionArrangement({ composition: null, cards: MOCK_SOUND_CARDS, units: MOCK_SOUND_UNITS, requestedIds: ids });
     expect(result.composition.contextAnalysis?.decision).toBe("run-deterministic-arranger");
+    expect(result.composition.arrangerVersion).toBe("arranger-v2");
+    expect(new Set(result.composition.events.map((event) => event.section))).toEqual(new Set(["opening", "development", "peak", "ending"]));
   });
 
   it("preserves moved events when the selection is unchanged", () => {

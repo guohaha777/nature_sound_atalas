@@ -39,7 +39,7 @@ export function decideNextTeachingAction(
   }
 
   if (state.recognition.status === "not-started") {
-    return { kind: "call-tool", stage: "recognition", tool: "read_sound_card", reason: "需要先读取声音卡的来源与六字段。" };
+    return { kind: "call-tool", stage: "recognition", tool: "read_sound_card", reason: "需要先读取声音卡的来源与声音配方。" };
   }
 
   const recognitionNeedsConfirmation = state.recognition.status === "failed"
@@ -71,7 +71,7 @@ export function decideNextTeachingAction(
   }
 
   if (state.soundUnit.status === "pending") {
-    return { kind: "call-tool", stage: "sound-rendering", tool: "render_sound_unit", reason: "按儿童确认的六字段生成非破坏性声音单元。" };
+    return { kind: "call-tool", stage: "sound-rendering", tool: "render_sound_unit", reason: "按儿童确认的声音配方生成非破坏性声音单元。" };
   }
 
   if (state.composition.selectedSoundCount < 1) {

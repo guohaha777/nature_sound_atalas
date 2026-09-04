@@ -55,7 +55,7 @@ export interface ConfirmedSoundCard {
   recognition?: SoundCardRecognition;
 }
 
-/** 一张纸质声卡最多容纳三个声音条目；每个条目仍独立确认六字段。 */
+/** 一张纸质声卡最多容纳三个声音条目；每个条目仍独立确认声音配方。 */
 export interface PaperSoundCard {
   id: string;
   projectId: string;
@@ -88,3 +88,11 @@ export const FIELD_LABELS = {
   intensity: { soft: "轻轻的", medium: "刚刚好", loud: "响亮的" },
   pattern: { once: "出现一次", repeat: "重复出现", bursts: "一阵一阵", "fade-in": "慢慢出现" },
 } as const;
+
+/** 声音是怎么进来的；界面上不应直接显示 SoundInputMode 的英文枚举值。 */
+export const INPUT_MODE_LABELS: Record<SoundInputMode, string> = {
+  paper_card: "纸质声卡",
+  recording: "现场录音",
+  sound_library: "声音库",
+  demo: "示例声音",
+};

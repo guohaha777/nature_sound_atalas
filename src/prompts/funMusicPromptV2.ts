@@ -1,6 +1,6 @@
 import { resolveEmotionSelection } from "@/src/features/composition-emotion";
-import type { MusicPolishBrief } from "../contracts";
-import { deriveMusicPolishDirection } from "../rules/deriveMusicPolishDirection";
+import type { MusicPolishBrief } from "@/src/features/music-polish/contracts";
+import { deriveMusicPolishDirection } from "@/src/features/music-polish/rules/deriveMusicPolishDirection";
 
 export function buildFunMusicPromptV2(brief: MusicPolishBrief): string {
   const direction = deriveMusicPolishDirection(brief);

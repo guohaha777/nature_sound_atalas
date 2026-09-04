@@ -23,10 +23,10 @@ describe("resolveEventPlaybackDuration", () => {
     });
   });
 
-  it("accounts for pitch playback rate while still consuming the full buffer", () => {
+  it("preserves source duration when pitch changes", () => {
     expect(resolveEventPlaybackDuration({ ...baseEvent, semitoneShift: 12 }, 60, 12)).toMatchObject({
-      naturalSeconds: 6,
-      playbackSeconds: 6,
+      naturalSeconds: 12,
+      playbackSeconds: 12,
       wasTrimmed: false,
     });
   });
@@ -44,6 +44,15 @@ describe("resolveEventPlaybackDuration", () => {
     expect(resolveEventPlaybackDuration(baseEvent, 60, 12, 5)).toEqual({
       naturalSeconds: 12,
       playbackSeconds: 5,
+      shouldLoop: false,
+      wasTrimmed: true,
+    });
+  });
+
+  it("plays a non-destructive segment from a long source", () => {
+    expect(resolveEventPlaybackDuration({ ...baseEvent, sourceOffsetSeconds: 4, clipDurationSeconds: 2.5 }, 60, 12)).toEqual({
+      naturalSeconds: 8,
+      playbackSeconds: 2.5,
       shouldLoop: false,
       wasTrimmed: true,
     });

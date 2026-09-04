@@ -1,5 +1,7 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { buildCompositionAdvicePrompt, compositionAdviceBriefSchema, compositionAdviceResultSchema, hasMusicCreationValue } from "@/src/features/composition-advice";
+import { admitRequest } from "@/src/services/api-rate-limit";
+import { compositionAdviceBriefSchema, compositionAdviceResultSchema, hasMusicCreationValue } from "@/src/features/composition-advice";
+import { buildCompositionAdvicePrompt, JSON_ONLY_SYSTEM_MESSAGE } from "@/src/prompts";
 
 export async function POST(request: Request) {
   const parsed = compositionAdviceBriefSchema.safeParse((await request.json().catch(() => null) as { brief?: unknown } | null)?.brief);
@@ -16,7 +18,7 @@ export async function POST(request: Request) {
     if (!user || user.userId !== allowedUserId) return Response.json({ message: "当前访客没有使用作品理解额度的权限。" }, { status: 403 });
   }
 
-  const admission = admitAdvice(request);
+  const admission = admitRequest(request, ADVICE_RATE_LIMIT);
   if (!admission.ok) return Response.json({ message: admission.message }, { status: 429, headers: { "Retry-After": String(admission.retryAfterSeconds) } });
   try {
     const upstream = await fetch(endpoint, {
@@ -25,7 +27,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: "只返回合法 JSON，不要返回 Markdown。" },
+          { role: "system", content: JSON_ONLY_SYSTEM_MESSAGE },
           { role: "user", content: buildCompositionAdvicePrompt(parsed.data) },
         ],
         response_format: { type: "json_object" },
@@ -53,41 +55,17 @@ export async function POST(request: Request) {
   }
 }
 
-type AdviceRateState = { day: string; dailyCount: number; attempts: Map<string, number[]>; active: number };
-const WINDOW_MS = 60 * 60 * 1000;
-const PER_CLIENT_LIMIT = 12;
-const DAILY_LIMIT = 120;
-const MAX_CONCURRENCY = 6;
-
-function adviceRateState(): AdviceRateState {
-  const scope = globalThis as typeof globalThis & { __wanwuAdviceRateState?: AdviceRateState };
-  const day = new Date().toISOString().slice(0, 10);
-  if (!scope.__wanwuAdviceRateState || scope.__wanwuAdviceRateState.day !== day) scope.__wanwuAdviceRateState = { day, dailyCount: 0, attempts: new Map(), active: 0 };
-  return scope.__wanwuAdviceRateState;
-}
-
-function admitAdvice(request: Request): { ok: true; release(): void } | { ok: false; message: string; retryAfterSeconds: number } {
-  const state = adviceRateState();
-  const client = clientIdentifier(request);
-  const now = Date.now();
-  const recent = (state.attempts.get(client) ?? []).filter((time) => now - time < WINDOW_MS);
-  if (recent.length >= PER_CLIENT_LIMIT) return { ok: false, message: "作品理解次数较多，请稍后再试。", retryAfterSeconds: 300 };
-  if (state.dailyCount >= DAILY_LIMIT) return { ok: false, message: "今日作品理解额度已用完，将使用本地建议。", retryAfterSeconds: 3600 };
-  if (state.active >= MAX_CONCURRENCY) return { ok: false, message: "当前作品理解任务较多，请稍后再试。", retryAfterSeconds: 20 };
-  recent.push(now);
-  state.attempts.set(client, recent);
-  state.dailyCount += 1;
-  state.active += 1;
-  let released = false;
-  return { ok: true, release: () => { if (!released) { released = true; state.active = Math.max(0, state.active - 1); } } };
-}
-
-function clientIdentifier(request: Request) {
-  return request.headers.get("cf-connecting-ip")?.trim()
-    || request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim()
-    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || "unknown-client";
-}
+const ADVICE_RATE_LIMIT = {
+  scope: "composition-advice",
+  perClientLimit: 12,
+  dailyLimit: 120,
+  maxConcurrency: 6,
+  messages: {
+    perClient: "作品理解次数较多，请稍后再试。",
+    daily: "今日作品理解额度已用完，将使用本地建议。",
+    concurrency: "当前作品理解任务较多，请稍后再试。",
+  },
+} as const;
 
 function isPublicHttpsEndpoint(value: string) {
   try {

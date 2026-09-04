@@ -1,5 +1,6 @@
 import type { ConfirmedSoundCard, SoundUnit } from "../sound-card";
 import { mapCardToMusicIntent } from "../music-mapping";
+import { DEFAULT_COMPOSITION_DURATION_SECONDS } from "./durationOptions";
 import type { Composition, CompositionEvent } from "./types";
 
 function patternStarts(pattern: string, latestStart: number, offset: number): number[] {
@@ -11,7 +12,7 @@ function patternStarts(pattern: string, latestStart: number, offset: number): nu
   return fractions.map((fraction) => Math.min(latestStart, offset + span * fraction));
 }
 
-export function arrangeCompositionV1(cards: ConfirmedSoundCard[], units: SoundUnit[], revision = 1, durationSeconds = 24): Composition {
+export function arrangeCompositionV1(cards: ConfirmedSoundCard[], units: SoundUnit[], revision = 1, durationSeconds: number = DEFAULT_COMPOSITION_DURATION_SECONDS): Composition {
   const bpm = 88;
   const beatLength = durationSeconds * bpm / 60;
   const activeUnits = units.filter((unit) => unit.active);

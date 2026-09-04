@@ -6,7 +6,7 @@ export const PUBLIC_BASE_VERSIONS = Object.freeze({
   soundCard: "sound-card-v1",
   musicMapping: "music-mapping-v1",
   emotionMapping: "emotion-mapping-v1",
-  arranger: "arranger-v1",
+  arranger: "arranger-v2",
   polishPrompt: "polish-v1",
 } as const);
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { arrangeCompositionV1, attachCompositionContext } from "@/src/domain/composition";
+import { arrangeCompositionV1, attachCompositionContext, COMPOSITION_DURATION_OPTIONS } from "@/src/domain/composition";
 import { MOCK_SOUND_CARDS, MOCK_SOUND_UNITS } from "@/src/mocks/mockData";
-import { buildCompositionAdviceBrief, buildCompositionAdvicePrompt, buildLocalCompositionAdvice, compositionAdviceResultSchema, hasMusicCreationValue } from "./compositionAdvice";
+import { buildCompositionAdvicePrompt } from "@/src/prompts";
+import { buildCompositionAdviceBrief, buildLocalCompositionAdvice, compositionAdviceResultSchema, hasMusicCreationValue } from "./compositionAdvice";
 
 describe("composition advice", () => {
   it("builds an anonymous brief without names, places, labels, photos, or audio", () => {
@@ -57,3 +58,25 @@ describe("composition advice", () => {
     expect(hasMusicCreationValue({ concept: "repetition", childText: "同一个声音重复出现。重复会让耳朵记住这段音乐。", tryThis: "把它隔开重复三次，听听像不像一句歌。" })).toBe(true);
   });
 });
+
+describe("作品摘要与时长档位保持一致", () => {
+  it.each([...COMPOSITION_DURATION_OPTIONS])("每一个时长档位都能生成摘要与本地建议（%s 秒）", (durationSeconds) => {
+    const units = MOCK_SOUND_UNITS.map((unit, index) => ({ ...unit, active: index < 3 }));
+    const composition = attachCompositionContext(
+      arrangeCompositionV1(MOCK_SOUND_CARDS, units, 1, durationSeconds),
+      units,
+      "run-deterministic-arranger",
+    );
+
+    expect(() => buildCompositionAdviceBrief(composition, MOCK_SOUND_CARDS, units)).not.toThrow();
+    expect(buildCompositionAdviceBrief(composition, MOCK_SOUND_CARDS, units).durationSeconds).toBe(durationSeconds);
+    expect(buildLocalCompositionAdvice(composition, MOCK_SOUND_CARDS, units).sourceKind).toBe("local_rules");
+  });
+
+  it("时长超出范围时收进合法区间，而不是让教学建议整个失效", () => {
+    const units = MOCK_SOUND_UNITS.map((unit, index) => ({ ...unit, active: index < 2 }));
+    const composition = { ...arrangeCompositionV1(MOCK_SOUND_CARDS, units, 1, 30), durationSeconds: 600 };
+    expect(() => buildLocalCompositionAdvice(composition, MOCK_SOUND_CARDS, units)).not.toThrow();
+  });
+});
+

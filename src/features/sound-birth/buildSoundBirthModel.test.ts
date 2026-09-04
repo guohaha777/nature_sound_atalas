@@ -38,7 +38,7 @@ describe("sound birth model", () => {
     const second = buildSoundBirthPreview(card, unit, asset);
     expect(first).toEqual(second);
     expect(first.events).toHaveLength(4);
-    expect(first.events[0]).toMatchObject({ audioAssetId: asset.id, semitoneShift: 7, filterMotion: "lfo" });
+    expect(first.events[0]).toMatchObject({ audioAssetId: asset.id, semitoneShift: 3, filterMotion: "lfo" });
     expect(asset).toEqual(before);
   });
 

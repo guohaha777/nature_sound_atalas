@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Composition, CompositionTeachingAdvice } from "@/src/domain/composition";
+import { LEGACY_MIN_COMPOSITION_SECONDS, LONGEST_COMPOSITION_SECONDS, type Composition, type CompositionTeachingAdvice } from "@/src/domain/composition";
 import type { ConfirmedSoundCard, SoundUnit } from "@/src/domain/sound-card";
 
 const soundDescriptorSchema = z.object({
@@ -15,7 +15,7 @@ export const compositionAdviceBriefSchema = z.object({
   version: z.literal("composition-advice-brief-v1"),
   soundCount: z.number().int().min(1).max(20),
   eventCount: z.number().int().min(1).max(200),
-  durationSeconds: z.number().min(15).max(30),
+  durationSeconds: z.number().min(LEGACY_MIN_COMPOSITION_SECONDS).max(LONGEST_COMPOSITION_SECONDS),
   pitchBandCounts: z.object({ high: z.number().int().nonnegative(), mid: z.number().int().nonnegative(), low: z.number().int().nonnegative() }),
   density: z.enum(["open", "balanced", "busy"]),
   exactOverlapGroups: z.number().int().nonnegative().max(50),
@@ -60,14 +60,15 @@ export function buildCompositionAdviceBrief(composition: Composition, _cards: Co
     };
   });
   const analysis = composition.contextAnalysis;
+  // 摘要是本地数据，越界时收进合法范围即可；这里抛错会连本地教学建议一起失效。
   return compositionAdviceBriefSchema.parse({
     version: "composition-advice-brief-v1",
     soundCount: sounds.length,
-    eventCount: composition.events.length,
-    durationSeconds: composition.durationSeconds,
+    eventCount: Math.max(1, Math.min(200, composition.events.length)),
+    durationSeconds: clamp(composition.durationSeconds, LEGACY_MIN_COMPOSITION_SECONDS, LONGEST_COMPOSITION_SECONDS),
     pitchBandCounts: analysis?.pitchBandCounts ?? countPitchBands(sounds),
     density: analysis?.density ?? densityFrom(composition.events.length, composition.durationSeconds),
-    exactOverlapGroups: analysis?.exactOverlapGroups ?? 0,
+    exactOverlapGroups: Math.min(50, analysis?.exactOverlapGroups ?? 0),
     emotion: composition.emotionIntent.enabled ? composition.emotionIntent.label : null,
     sounds,
   });
@@ -107,23 +108,6 @@ export function buildLocalCompositionAdvice(composition: Composition, cards: Con
   };
 }
 
-export function buildCompositionAdvicePrompt(brief: CompositionAdviceBrief) {
-  return [
-    "你是面向小学低年级乡村儿童的声音创作教学助手。",
-    "只根据匿名结构化数据理解作品，不推测儿童身份、心理或能力，不修改编排。",
-    "返回严格 JSON：confidence、roles、backgroundRecommendation、musicDiscovery。",
-    "字段名和枚举值必须使用下面的英文，不能翻译、不能增减字段：",
-    '{"confidence":0.8,"roles":[{"soundIndex":1,"role":"lead","reason":"这个声音容易先被听见。"}],"backgroundRecommendation":{"value":"helpful","reason":"声音之间还有空位。"},"musicDiscovery":{"concept":"repetition","childText":"同一个声音重复出现。重复会让耳朵记住这段音乐。","tryThis":"把它隔开重复三次，听听像不像一句歌。"}}',
-    "roles 必须覆盖输入中的每个 soundIndex，且每个只出现一次；role 只能使用 lead、response、texture、pulse；理由不超过40个汉字。",
-    "backgroundRecommendation.value 只能使用 helpful、not-needed、uncertain。musicDiscovery.concept 只能使用 pitch、layering、density、dynamics、repetition。",
-    "musicDiscovery 面向小学低年级儿童：childText 不超过45个汉字，必须用两句短话同时回答“作品里听到了什么”和“这对音乐创作有什么用”；不能只写“像排队、像聊天”等比喻而不说明音乐作用。",
-    "tryThis 不超过35个汉字，只给一个能在声场页面完成的动作，并说清孩子要听出或比较什么变化。",
-    "不要使用音域、声部、织体、密度、动态、层次、动机、和声等专业词；可以说高低、前后、轻响、快慢、重复、空一空。",
-    "背景只能建议，不能自动决定。",
-    JSON.stringify(brief),
-  ].join("\n");
-}
-
 export function stableAdviceHash(value: string) {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
@@ -151,4 +135,8 @@ function discoveryFrom(brief: CompositionAdviceBrief): CompositionTeachingAdvice
   if (activePitchBands > 1) return { concept: "pitch", childText: "声音有高有低。让高低交替，音乐会像走台阶一样起伏。", tryThis: "把一个声音上下移动，听听音乐的起伏。" };
   if (new Set(brief.sounds.map((sound) => sound.intensity)).size > 1) return { concept: "dynamics", childText: "声音有轻有响。轻响变化会让音乐像靠近又走远。", tryThis: "把一个声音变轻，听听它是不是像走远了。" };
   return { concept: "repetition", childText: "同一个声音重复出现。重复会让耳朵记住这段音乐。", tryThis: "把它隔开重复三次，听听像不像一句歌。" };
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(value, minimum), maximum);
 }

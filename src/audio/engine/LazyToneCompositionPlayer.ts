@@ -41,6 +41,7 @@ export class LazyToneCompositionPlayer implements CompositionPlayer {
 
   play(): void { this.inner?.play(); }
   pause(): void { this.inner?.pause(); }
+  seek(seconds: number): void { this.inner?.seek(seconds); }
   stop(): void { this.inner?.stop(); }
   setPolishEnabled(enabled: boolean): void {
     this.state = { ...this.state, polishEnabled: enabled };

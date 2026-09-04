@@ -2,22 +2,23 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import type { AIPolishLayer, Composition, EmotionIntent } from "@/src/domain/composition";
-import { arrangeCompositionV1, attachCompositionContext } from "@/src/domain/composition";
+import type { AIPolishLayer, Composition, CompositionTeachingAdvice, EmotionIntent } from "@/src/domain/composition";
+import { arrangeCompositionV2, attachCompositionContext } from "@/src/domain/composition";
 import type { OriginalAudioAsset } from "@/src/domain/audio-asset";
 import type { ConfirmedSoundCard, ContourChoice, DurationChoice, IntensityChoice, PaperSoundCard, PatternChoice, PitchChoice, SoundUnit } from "@/src/domain/sound-card";
 import { LazyToneCompositionPlayer, type PlaybackState } from "@/src/audio";
 import { createInitialDemoSnapshot, normalizeDemoSnapshot } from "@/src/features/bootstrap-demo";
 import { buildSoundBirthPreview, canPlaySoundCard } from "@/src/features/sound-birth";
-import { deleteWorldCompositionEvent, duplicateWorldCompositionEvent, moveWorldCompositionEvent, updateWorldComposition, type WorldArrangementValues } from "@/src/features/sound-world";
+import { deleteWorldCompositionEvent, duplicateWorldCompositionEvent, durationOptionFitsUserClips, minimumCompositionSecondsForUserClips, moveWorldCompositionEvent, normalizeEditableSourceClips, updateCompositionEventSourceClip, updateWorldComposition, type WorldArrangementValues } from "@/src/features/sound-world";
+import { buildCompositionAdviceBrief, stableAdviceHash } from "@/src/features/composition-advice";
 import { buildExperienceRoute } from "@/src/features/start-demo/buildExperienceRoute";
 import { coordinateCompositionArrangement } from "@/src/features/teaching-agent";
 import { PAGE_TRANSITION_EVENT, PageTransitionIndicator } from "@/src/features/page-transition";
-import { resizeCompositionDuration, type CompositionDurationSeconds } from "@/src/features/composition-duration";
+import { ensureNaturalSoundContinuity, recommendCompositionDuration, resizeCompositionDuration, smallestDurationOptionFor, type CompositionDurationSeconds } from "@/src/features/composition-duration";
 import type { CardImageAcquisition, CompositionAdvicePort, DemoRepository, DemoSnapshot, LibraryItemPreference, PendingCardImage, PendingCaptureRepository, PolishGenerationPort, StoredRecording } from "@/src/features/ports";
 import type { MockSoundCard } from "@/src/mocks/mockData";
 import { HybridCompositionAdvisor } from "@/src/services/composition-advice/HybridCompositionAdvisor";
-import { FunMusicPolishGenerator } from "@/src/services/fun-music/FunMusicPolishGenerator";
+import { AceStepPolishGenerator } from "@/src/services/acestep/AceStepPolishGenerator";
 import { DexieDemoRepository, DexiePendingCaptureRepository, ResilientDemoRepository, WanwuDatabase } from "@/src/storage";
 
 type PolishStatus = "idle" | "requesting" | "ready" | "failed" | "declined" | "fallback";
@@ -52,6 +53,7 @@ interface ExperienceContextValue {
   cards: MockSoundCard[];
   paperCards: PaperSoundCard[];
   audioAssets: OriginalAudioAsset[];
+  audioPlaybackUrls: Record<string, string>;
   units: SoundUnit[];
   composition: Composition | null;
   archivedCompositions: Composition[];
@@ -86,10 +88,12 @@ interface ExperienceContextValue {
   moveWorldEvent(eventId: string, patch: { startBeat?: number; pitch?: PitchChoice }): void;
   duplicateWorldEvent(eventId: string): void;
   deleteWorldEvent(eventId: string): void;
+  updateWorldEventClip(eventId: string, selection: { startSeconds: number; endSeconds: number }, options?: { expandWorkToFit?: boolean }): void;
   playCard(id: string, options?: { fullOriginal?: boolean; allowDraft?: boolean }): Promise<void>;
   prepareComposition(): Composition;
-  playComposition(options?: { includePolish?: boolean }): Promise<void>;
+  playComposition(options?: { includePolish?: boolean; excludeGeneratedSupport?: boolean }): Promise<void>;
   playArchivedComposition(id: string): Promise<void>;
+  seekPlayback(seconds: number): Promise<void>;
   pausePlayback(): void;
   togglePolish(enabled: boolean): void;
   generatePolish(useFallback?: boolean): Promise<boolean>;
@@ -114,7 +118,6 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   const [repository] = useState<DemoRepository>(() => new ResilientDemoRepository(new DexieDemoRepository(database)));
   const [captureRepository] = useState<PendingCaptureRepository>(() => new DexiePendingCaptureRepository(database));
   const [player] = useState(() => new LazyToneCompositionPlayer());
-  const [polish] = useState<PolishGenerationPort>(() => new FunMusicPolishGenerator());
   const [compositionAdvisor] = useState<CompositionAdvicePort>(() => new HybridCompositionAdvisor());
   const loadedPlanRef = useRef<string | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -543,16 +546,19 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
 
   const confirmCurrentCard = useCallback((cardId?: string) => {
     const confirmedAt = new Date().toISOString();
-    setSnapshot((current) => ({
-      ...current,
-      completedSteps: current.completedSteps.includes("confirm") ? current.completedSteps : [...current.completedSteps, "confirm"],
-      cards: current.cards.map((card) => card.id === (cardId ?? current.currentCardId) ? {
-        ...card,
-        confirmedAt,
-        recognition: card.recognition ? { ...card.recognition, teacherConfirmed: true, confirmedAt } : undefined,
-        source: { ...card.source, decisionSource: "human_confirmed" },
-      } : card),
-    }));
+    setSnapshot((current) => {
+      const completedSteps = [...new Set([...current.completedSteps, "confirm", "birth"])];
+      return {
+        ...current,
+        completedSteps,
+        cards: current.cards.map((card) => card.id === (cardId ?? current.currentCardId) ? {
+          ...card,
+          confirmedAt,
+          recognition: card.recognition ? { ...card.recognition, teacherConfirmed: true, confirmedAt } : undefined,
+          source: { ...card.source, decisionSource: "human_confirmed" },
+        } : card),
+      };
+    });
   }, []);
 
   const recordingPlaybackUrls = useMemo(() => Object.fromEntries(recordings.map((recording) => [recording.id, URL.createObjectURL(recording.blob)])), [recordings]);
@@ -561,6 +567,15 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     const recordingId = asset.storageRef.startsWith("indexeddb://") ? asset.storageRef.slice("indexeddb://".length) : null;
     return [asset.id, { id: asset.id, url: recordingId ? recordingPlaybackUrls[recordingId] ?? asset.storageRef : asset.storageRef, sourceKey: asset.sourceKey }];
   })), [recordingPlaybackUrls, snapshot.audioAssets]);
+  const audioPlaybackUrls = useMemo(() => Object.fromEntries(Object.entries(playbackAssets).map(([id, asset]) => [id, asset.url])), [playbackAssets]);
+
+  // 背景生成要先把编排渲染成音频送给模型，所以它得拿到当前的音频资产表。
+  // 生成器本身不持有状态，随资产表一起重建即可——比在 useState 里构造一次
+  // 再想办法把新资产传进去简单，也不会留下一份过期的闭包。
+  const polish = useMemo<PolishGenerationPort>(
+    () => new AceStepPolishGenerator((composition) => ({ composition, assets: playbackAssets })),
+    [playbackAssets],
+  );
 
   const playCard = useCallback(async (id: string, options?: { fullOriginal?: boolean; allowDraft?: boolean }) => {
     const card = cards.find((item) => item.id === id);
@@ -570,7 +585,8 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     if (!canPlaySoundCard(card, asset, options?.allowDraft)) return;
     if (!asset) return;
     const preview = buildSoundBirthPreview(card, unit, asset, options);
-    const planKey = `${preview.id}:${preview.revision}:none`;
+    const parameterKey = [card.pitch, card.duration, card.contour, card.intensity, card.pattern].join(":");
+    const planKey = `${preview.id}:${preview.revision}:${parameterKey}:none`;
     if (loadedPlanRef.current === planKey && playback.status === "playing") {
       player.pause();
       return;
@@ -589,27 +605,52 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   }, [cards, complete, playback.status, playbackAssets, player, snapshot.audioAssets, snapshot.units]);
 
   const prepareComposition = useCallback(() => {
-    const nextRevision = (snapshot.composition?.revision ?? 0) + 1;
-    const next = attachCompositionContext(
-      arrangeCompositionV1(cards, snapshot.units, nextRevision, snapshot.composition?.durationSeconds ?? 24),
-      snapshot.units,
-      "run-deterministic-arranger",
-    );
+    const recommendation = recommendCompositionDuration(snapshot.units, snapshot.audioAssets);
+    const existing = snapshot.composition;
+    // 推荐时长不能剪短儿童已经选好的声音片段。
+    const minimumUserClipSeconds = minimumCompositionSecondsForUserClips(existing);
+    const requestedDuration: CompositionDurationSeconds = existing?.durationRecommendation
+      ? existing.durationSeconds as CompositionDurationSeconds
+      : recommendation.seconds;
+    const targetDuration: CompositionDurationSeconds = requestedDuration + 0.001 >= minimumUserClipSeconds
+      ? requestedDuration
+      : smallestDurationOptionFor(minimumUserClipSeconds) ?? requestedDuration;
+    const shouldUpgradeUntouchedV1 = existing?.arrangerVersion === "arranger-v1"
+      && existing.contextAnalysis?.decision === "run-deterministic-arranger"
+      && !existing.savedAt;
+    const base = shouldUpgradeUntouchedV1
+      ? arrangeCompositionV2(cards, snapshot.units, existing.revision + 1, targetDuration, existing.seed)
+      : existing
+      ? targetDuration === existing.durationSeconds ? existing : resizeCompositionDuration(existing, targetDuration)
+      : attachCompositionContext(
+        arrangeCompositionV2(cards, snapshot.units, 1, targetDuration),
+        snapshot.units,
+        "run-deterministic-arranger",
+      );
+    const decision = existing?.contextAnalysis?.decision ?? "run-deterministic-arranger";
+    const continuous = ensureNaturalSoundContinuity({
+      ...base,
+      durationRecommendation: recommendation,
+    }, snapshot.units, snapshot.audioAssets);
+    const next = attachCompositionContext(continuous, snapshot.units, decision);
     setSnapshot((current) => ({ ...current, composition: next, completedSteps: current.completedSteps.includes("world") ? current.completedSteps : [...current.completedSteps, "world"] }));
     return next;
-  }, [cards, snapshot.composition?.durationSeconds, snapshot.composition?.revision, snapshot.units]);
+  }, [cards, snapshot.audioAssets, snapshot.composition, snapshot.units]);
 
-  const playComposition = useCallback(async (options?: { includePolish?: boolean }) => {
+  const playComposition = useCallback(async (options?: { includePolish?: boolean; excludeGeneratedSupport?: boolean }) => {
     const storedComposition = snapshot.composition ?? attachCompositionContext(
-      arrangeCompositionV1(cards, snapshot.units, 1),
+      arrangeCompositionV2(cards, snapshot.units, 1),
       snapshot.units,
       "run-deterministic-arranger",
     );
     if (!snapshot.composition) setSnapshot((current) => ({ ...current, composition: storedComposition }));
-    const composition = options?.includePolish === false
+    const withoutPolish = options?.includePolish === false
       ? { ...storedComposition, polishLayer: null, polishEnabled: false }
       : storedComposition;
-    const planKey = `${composition.id}:${composition.revision}:${composition.polishLayer?.id ?? "none"}:${options?.includePolish === false ? "base-only" : "full"}`;
+    const composition = options?.excludeGeneratedSupport
+      ? { ...withoutPolish, events: withoutPolish.events.filter((event) => !event.generatedBy) }
+      : withoutPolish;
+    const planKey = `${composition.id}:${composition.revision}:${composition.polishLayer?.id ?? "none"}:${options?.includePolish === false ? "base-only" : "full"}:${options?.excludeGeneratedSupport ? "visible-events" : "all-events"}`;
     if (loadedPlanRef.current === planKey && playback.status === "playing") {
       player.pause();
       return;
@@ -647,6 +688,26 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     }
   }, [playback.status, playbackAssets, player, snapshot.archivedCompositions]);
 
+  const seekPlayback = useCallback(async (seconds: number) => {
+    const composition = snapshot.composition ?? attachCompositionContext(
+      arrangeCompositionV2(cards, snapshot.units, 1),
+      snapshot.units,
+      "run-deterministic-arranger",
+    );
+    if (!snapshot.composition) setSnapshot((current) => ({ ...current, composition }));
+    const planKey = `${composition.id}:${composition.revision}:${composition.polishLayer?.id ?? "none"}:full:all-events`;
+    try {
+      await player.unlock();
+      if (loadedPlanRef.current !== planKey || playback.status === "error") {
+        await player.load({ composition, assets: playbackAssets });
+        loadedPlanRef.current = planKey;
+      }
+      player.seek(seconds);
+    } catch {
+      loadedPlanRef.current = null;
+    }
+  }, [cards, playback.status, playbackAssets, player, snapshot.composition, snapshot.units]);
+
   const pausePlayback = useCallback(() => player.pause(), [player]);
 
   const requestCompositionAdvice = useCallback(async () => {
@@ -666,10 +727,19 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
       advice = compositionAdvisor.fallback(composition, current.cards, current.units);
       status = "fallback";
     }
-    setSnapshot((latest) => latest.composition?.revision === composition.revision ? {
-      ...latest,
-      composition: { ...latest.composition, teachingAdvice: advice },
-    } : latest);
+    // 等待期间作品可能又被改动（例如刚生成完背景）。判断依据是匿名摘要本身有没有变：
+    // 摘要没变就沿用这份解释并盖上新版本号；摘要真的变了才退回 idle，由下一轮重新解释。
+    const latest = snapshotRef.current;
+    const latestComposition = latest.composition;
+    if (!latestComposition) return;
+    if (latestComposition.revision !== composition.revision && !describesSameComposition(advice, latestComposition, latest.cards, latest.units)) {
+      setCompositionAdviceStatus("idle");
+      return;
+    }
+    setSnapshot((current) => current.composition ? {
+      ...current,
+      composition: { ...current.composition, teachingAdvice: { ...advice, compositionRevision: current.composition.revision } },
+    } : current);
     setCompositionAdviceStatus(status);
   }, [compositionAdvisor]);
 
@@ -681,7 +751,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   const generatePolish = useCallback(async (useFallback = false) => {
     const current = snapshotRef.current;
     const composition = current.composition ?? attachCompositionContext(
-      arrangeCompositionV1(current.cards, current.units, 1),
+      arrangeCompositionV2(current.cards, current.units, 1),
       current.units,
       "run-deterministic-arranger",
     );
@@ -723,7 +793,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     setSnapshot((current) => {
       const units = current.units.map((unit) => unit.id === id ? { ...unit, active: !unit.active } : unit);
       const next = current.composition ? attachCompositionContext({
-        ...arrangeCompositionV1(current.cards, units, current.composition.revision + 1, current.composition.durationSeconds),
+        ...arrangeCompositionV2(current.cards, units, current.composition.revision + 1, current.composition.durationSeconds, current.composition.seed),
         title: current.composition.title,
         createdAt: current.composition.createdAt,
         polishLayer: current.composition.polishLayer,
@@ -740,15 +810,16 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
       if (ids.length === 0) {
         return { ...current, units: current.units.map((unit) => ({ ...unit, active: false })), composition: null };
       }
-      const next = coordinateCompositionArrangement({ composition: current.composition, cards: current.cards, units: current.units, requestedIds: ids });
-      return { ...current, units: next.units, composition: markCompositionDraft(next.composition, current.composition) };
+      const next = coordinateCompositionArrangement({ composition: invalidateAutomaticArrangementSupport(current.composition), cards: current.cards, units: current.units, requestedIds: ids });
+      const normalized = normalizeEditableSourceClips(next.composition, current.audioAssets);
+      return { ...current, units: next.units, composition: markCompositionDraft(normalized, current.composition) };
     });
   }, []);
 
   const updateWorldArrangement = useCallback((soundUnitId: string, patch: Partial<WorldArrangementValues>) => {
     setSnapshot((current) => {
-      const base = current.composition ?? attachCompositionContext(
-        arrangeCompositionV1(current.cards, current.units, 1),
+      const base = invalidateAutomaticArrangementSupport(current.composition) ?? attachCompositionContext(
+        arrangeCompositionV2(current.cards, current.units, 1),
         current.units,
         "run-deterministic-arranger",
       );
@@ -758,21 +829,41 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   }, []);
 
   const moveWorldEvent = useCallback((eventId: string, patch: { startBeat?: number; pitch?: PitchChoice }) => {
-    setSnapshot((current) => current.composition ? { ...current, composition: markCompositionDraft(attachCompositionContext(moveWorldCompositionEvent(current.composition, eventId, patch), current.units, "preserve-child-arrangement"), current.composition) } : current);
+    setSnapshot((current) => current.composition ? { ...current, composition: markCompositionDraft(attachCompositionContext(moveWorldCompositionEvent(invalidateAutomaticArrangementSupport(current.composition)!, eventId, patch), current.units, "preserve-child-arrangement"), current.composition) } : current);
   }, []);
 
   const duplicateWorldEvent = useCallback((eventId: string) => {
-    setSnapshot((current) => current.composition ? { ...current, composition: markCompositionDraft(attachCompositionContext(duplicateWorldCompositionEvent(current.composition, eventId), current.units, "preserve-child-arrangement"), current.composition) } : current);
+    setSnapshot((current) => current.composition ? { ...current, composition: markCompositionDraft(attachCompositionContext(duplicateWorldCompositionEvent(invalidateAutomaticArrangementSupport(current.composition)!, eventId), current.units, "preserve-child-arrangement"), current.composition) } : current);
   }, []);
 
   const deleteWorldEvent = useCallback((eventId: string) => {
     setSnapshot((current) => {
       if (!current.composition) return current;
-      const deleted = deleteWorldCompositionEvent(current.composition, eventId);
+      const deleted = deleteWorldCompositionEvent(invalidateAutomaticArrangementSupport(current.composition)!, eventId);
       const next = markCompositionDraft(attachCompositionContext(deleted, current.units, "preserve-child-arrangement"), current.composition);
       if (next.events.length === 0) return { ...current, composition: null, units: current.units.map((unit) => ({ ...unit, active: false })) };
       const selected = new Set(next.soundUnitIds);
       return { ...current, composition: next, units: current.units.map((unit) => ({ ...unit, active: selected.has(unit.id) })) };
+    });
+  }, []);
+
+  const updateWorldEventClip = useCallback((eventId: string, selection: { startSeconds: number; endSeconds: number }, options?: { expandWorkToFit?: boolean }) => {
+    setSnapshot((current) => {
+      const invalidated = invalidateAutomaticArrangementSupport(current.composition);
+      const event = invalidated?.events.find((item) => item.id === eventId);
+      const asset = event ? current.audioAssets.find((item) => item.id === event.audioAssetId) : null;
+      if (!invalidated || !event || !asset) return current;
+      // 放置空间不足时不静默截断：先按需要把作品换成更长的档位，再套用完整选区。
+      const requiredSeconds = Math.max(0, selection.endSeconds - selection.startSeconds);
+      const expanded = options?.expandWorkToFit ? smallestDurationOptionFor(requiredSeconds) : null;
+      const base = expanded && expanded > invalidated.durationSeconds
+        ? { ...resizeCompositionDuration(invalidated, expanded), durationOrigin: "user" as const }
+        : invalidated;
+      const updated = updateCompositionEventSourceClip(base, eventId, asset, selection);
+      return {
+        ...current,
+        composition: markCompositionDraft(attachCompositionContext(updated, current.units, "preserve-child-arrangement"), current.composition),
+      };
     });
   }, []);
 
@@ -782,7 +873,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
       const cards = current.cards.map((card) => card.id === cardId ? { ...card, pattern: order[(order.indexOf(card.pattern) + 1) % order.length] } : card);
       const units = current.units.map((unit) => unit.cardId === cardId ? { ...unit, parameters: { ...unit.parameters, pattern: order[(order.indexOf(unit.parameters.pattern) + 1) % order.length] } } : unit);
       const composition = current.composition ? attachCompositionContext({
-        ...arrangeCompositionV1(cards, units, current.composition.revision + 1, current.composition.durationSeconds),
+        ...arrangeCompositionV2(cards, units, current.composition.revision + 1, current.composition.durationSeconds, current.composition.seed),
         title: current.composition.title,
         createdAt: current.composition.createdAt,
         polishLayer: current.composition.polishLayer,
@@ -803,7 +894,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     };
     const current = snapshotRef.current;
     const base = current.composition ?? attachCompositionContext(
-      arrangeCompositionV1(current.cards, current.units, 1),
+      arrangeCompositionV2(current.cards, current.units, 1),
       current.units,
       "run-deterministic-arranger",
     );
@@ -824,7 +915,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   const setCompositionEmotionPoint = useCallback((input: { valence: number; arousal: number; label: Exclude<EmotionIntent["label"], null> }) => {
     const current = snapshotRef.current;
     const base = current.composition ?? attachCompositionContext(
-      arrangeCompositionV1(current.cards, current.units, 1),
+      arrangeCompositionV2(current.cards, current.units, 1),
       current.units,
       "run-deterministic-arranger",
     );
@@ -844,10 +935,15 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   const setCompositionDuration = useCallback((seconds: CompositionDurationSeconds) => {
     player.stop();
     loadedPlanRef.current = null;
-    setSnapshot((current) => current.composition ? {
+    // 儿童手动选择的声音片段是作品时长的下限，切换档位不能把它剪短。
+    setSnapshot((current) => current.composition && durationOptionFitsUserClips(current.composition, seconds) ? {
       ...current,
       composition: markCompositionDraft(
-        attachCompositionContext(resizeCompositionDuration(current.composition, seconds), current.units, "preserve-child-arrangement"),
+        ensureNaturalSoundContinuity(
+          attachCompositionContext({ ...resizeCompositionDuration(invalidateNaturalSoundContinuity(current.composition)!, seconds), durationOrigin: "user" as const }, current.units, "preserve-child-arrangement"),
+          current.units,
+          current.audioAssets,
+        ),
         current.composition,
       ),
     } : current);
@@ -897,6 +993,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     cards,
     paperCards: snapshot.paperCards,
     audioAssets: snapshot.audioAssets,
+    audioPlaybackUrls,
     units: snapshot.units,
     composition: snapshot.composition,
     archivedCompositions: snapshot.archivedCompositions,
@@ -931,10 +1028,12 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     moveWorldEvent,
     duplicateWorldEvent,
     deleteWorldEvent,
+    updateWorldEventClip,
     playCard,
     prepareComposition,
     playComposition,
     playArchivedComposition,
+    seekPlayback,
     pausePlayback,
     togglePolish,
     generatePolish,
@@ -946,7 +1045,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     setCompositionDuration,
     saveWork,
     resetDemo,
-  }), [bindCardToLibrarySource, cards, compositionAdviceStatus, confirmCurrentCard, contributorNames, createPaperSoundDrafts, currentCard, cyclePattern, deleteLibraryItem, deleteWorldEvent, dismissPolishFailure, duplicateWorldEvent, generatePolish, hydrated, libraryItemPreferences, moveWorldEvent, pausePlayback, pendingCardImage, persistenceStatus, playArchivedComposition, playCard, playComposition, playback, polishErrorMessage, polishStatus, prepareComposition, recordings, registerContributorName, renameLibraryItem, requestCompositionAdvice, resetDemo, savePendingCardImage, saveRecording, saveWork, selectCard, selectRecording, setActiveUnits, setCompositionDuration, setCompositionEmotion, setCompositionEmotionPoint, snapshot.archivedCompositions, snapshot.audioAssets, snapshot.completedSteps, snapshot.composition, snapshot.currentPath, snapshot.paperCards, snapshot.project.name, snapshot.units, startDemo, togglePolish, toggleUnit, updateCurrentCard, updateWorldArrangement]);
+  }), [audioPlaybackUrls, bindCardToLibrarySource, cards, compositionAdviceStatus, confirmCurrentCard, contributorNames, createPaperSoundDrafts, currentCard, cyclePattern, deleteLibraryItem, deleteWorldEvent, dismissPolishFailure, duplicateWorldEvent, generatePolish, hydrated, libraryItemPreferences, moveWorldEvent, pausePlayback, pendingCardImage, persistenceStatus, playArchivedComposition, playCard, playComposition, playback, polishErrorMessage, polishStatus, prepareComposition, recordings, registerContributorName, renameLibraryItem, requestCompositionAdvice, resetDemo, savePendingCardImage, saveRecording, saveWork, seekPlayback, selectCard, selectRecording, setActiveUnits, setCompositionDuration, setCompositionEmotion, setCompositionEmotionPoint, snapshot.archivedCompositions, snapshot.audioAssets, snapshot.completedSteps, snapshot.composition, snapshot.currentPath, snapshot.paperCards, snapshot.project.name, snapshot.units, startDemo, togglePolish, toggleUnit, updateCurrentCard, updateWorldArrangement, updateWorldEventClip]);
 
   return (
     <ExperienceContext.Provider value={value}>
@@ -977,6 +1076,38 @@ function markCompositionDraft(composition: Composition, previous?: Composition |
     title: previous?.title ?? composition.title,
     createdAt: previous?.createdAt ?? composition.createdAt,
     savedAt: undefined,
+  };
+}
+
+/** 解释是否仍然对得上当前作品：比较匿名摘要的哈希，而不是版本号。 */
+function describesSameComposition(
+  advice: CompositionTeachingAdvice,
+  composition: Composition,
+  cards: ConfirmedSoundCard[],
+  units: SoundUnit[],
+): boolean {
+  try {
+    return stableAdviceHash(JSON.stringify(buildCompositionAdviceBrief(composition, cards, units))) === advice.basedOnInputHash;
+  } catch {
+    return false;
+  }
+}
+
+function invalidateNaturalSoundContinuity(composition: Composition | null): Composition | null {
+  if (!composition) return null;
+  return {
+    ...composition,
+    events: composition.events.filter((event) => event.generatedBy !== "natural-sound-continuity-v1"),
+    naturalSoundContinuity: undefined,
+  };
+}
+
+function invalidateAutomaticArrangementSupport(composition: Composition | null): Composition | null {
+  if (!composition) return null;
+  return {
+    ...composition,
+    events: composition.events.filter((event) => !event.generatedBy),
+    naturalSoundContinuity: undefined,
   };
 }
 

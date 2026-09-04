@@ -26,6 +26,7 @@ export interface CompositionPlayer {
   load(plan: PlaybackPlan): Promise<void>;
   play(): void;
   pause(): void;
+  seek(seconds: number): void;
   stop(): void;
   setPolishEnabled(enabled: boolean): void;
   subscribe(listener: (state: PlaybackState) => void): () => void;

@@ -1,5 +1,7 @@
-import { buildFunMusicPromptV2, FUN_MUSIC_PROMPT_VERSION, musicPolishBriefSchema } from "@/src/features/music-polish";
+import { musicPolishBriefSchema } from "@/src/features/music-polish";
+import { buildFunMusicPromptV2, FUN_MUSIC_PROMPT_VERSION } from "@/src/prompts";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { admitRequest } from "@/src/services/api-rate-limit";
 
 export async function POST(request: Request) {
   const parsed = musicPolishBriefSchema.safeParse((await request.json().catch(() => null) as { brief?: unknown } | null)?.brief);
@@ -7,15 +9,16 @@ export async function POST(request: Request) {
 
   const apiKey = process.env.FUN_MUSIC_API_KEY?.trim();
   const endpoint = process.env.FUN_MUSIC_API_ENDPOINT?.trim();
+  const model = process.env.FUN_MUSIC_MODEL?.trim() || "fun-music-preview";
   const allowedUserId = process.env.FUN_MUSIC_ALLOWED_USER_ID?.trim();
-  if (!apiKey || !endpoint) return Response.json({ message: "Fun-Music API 尚未配置，请联系演示管理员。" }, { status: 503 });
+  if (!apiKey || !endpoint) return Response.json({ message: "这台设备还没有开通 AI 背景音乐。" }, { status: 503 });
   if (allowedUserId) {
     const user = await getChatGPTUser();
     if (!user || user.userId !== allowedUserId) return Response.json({ message: "当前访客没有使用 AI 音乐额度的权限。" }, { status: 403 });
   }
   if (!isAllowedEndpoint(endpoint)) return Response.json({ message: "Fun-Music 服务地址配置无效。" }, { status: 500 });
 
-  const admission = admitMusicGeneration(request);
+  const admission = admitRequest(request, FUN_MUSIC_RATE_LIMIT);
   if (!admission.ok) {
     return Response.json(
       { message: admission.message },
@@ -28,7 +31,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: process.env.FUN_MUSIC_MODEL?.trim() || "fun-music-preview",
+        model,
         input: { prompt: buildFunMusicPromptV2(parsed.data), is_instrumental: true, format: "mp3", enable_aigc_watermark: false },
       }),
       signal: AbortSignal.timeout(180_000),
@@ -51,7 +54,7 @@ export async function POST(request: Request) {
       expiresAt: result.output.audio.expires_at,
       requestId: result.request_id ?? crypto.randomUUID(),
       provider: "aliyun-bailian",
-      model: "fun-music-preview",
+      model,
       promptVersion: FUN_MUSIC_PROMPT_VERSION,
       generatedDurationSeconds: durationSeconds,
       channels,
@@ -65,67 +68,19 @@ export async function POST(request: Request) {
   }
 }
 
-type MusicRateState = {
-  day: string;
-  dailyCount: number;
-  attempts: Map<string, number[]>;
-  activeClients: Set<string>;
-  activeTotal: number;
-};
-
-const RATE_WINDOW_MS = 60 * 60 * 1000;
-const PER_CLIENT_LIMIT = 3;
-const DAILY_INSTANCE_LIMIT = 30;
-const MAX_INSTANCE_CONCURRENCY = 3;
-
-function musicRateState(): MusicRateState {
-  const scope = globalThis as typeof globalThis & { __wanwuMusicRateState?: MusicRateState };
-  const today = new Date().toISOString().slice(0, 10);
-  if (!scope.__wanwuMusicRateState || scope.__wanwuMusicRateState.day !== today) {
-    scope.__wanwuMusicRateState = { day: today, dailyCount: 0, attempts: new Map(), activeClients: new Set(), activeTotal: 0 };
-  }
-  return scope.__wanwuMusicRateState;
-}
-
-function admitMusicGeneration(request: Request):
-  | { ok: true; release: () => void }
-  | { ok: false; message: string; retryAfterSeconds: number } {
-  const state = musicRateState();
-  const client = clientIdentifier(request);
-  const now = Date.now();
-  const recent = (state.attempts.get(client) ?? []).filter((time) => now - time < RATE_WINDOW_MS);
-  state.attempts.set(client, recent);
-
-  if (state.activeClients.has(client)) return { ok: false, message: "已有一首 AI 背景正在生成，请完成后再试。", retryAfterSeconds: 15 };
-  if (state.activeTotal >= MAX_INSTANCE_CONCURRENCY) return { ok: false, message: "当前生成任务较多，请稍后再试。", retryAfterSeconds: 30 };
-  if (recent.length >= PER_CLIENT_LIMIT) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((RATE_WINDOW_MS - (now - recent[0])) / 1000));
-    return { ok: false, message: "生成次数较多，请稍后再试。", retryAfterSeconds };
-  }
-  if (state.dailyCount >= DAILY_INSTANCE_LIMIT) return { ok: false, message: "今日 Fun-Music 体验额度已用完，将尝试智能音符背景。", retryAfterSeconds: 3600 };
-
-  recent.push(now);
-  state.dailyCount += 1;
-  state.activeClients.add(client);
-  state.activeTotal += 1;
-  let released = false;
-  return {
-    ok: true,
-    release: () => {
-      if (released) return;
-      released = true;
-      state.activeClients.delete(client);
-      state.activeTotal = Math.max(0, state.activeTotal - 1);
-    },
-  };
-}
-
-function clientIdentifier(request: Request) {
-  return request.headers.get("cf-connecting-ip")?.trim()
-    || request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim()
-    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || "unknown-client";
-}
+const FUN_MUSIC_RATE_LIMIT = {
+  scope: "fun-music",
+  perClientLimit: 3,
+  dailyLimit: 30,
+  maxConcurrency: 3,
+  singleFlightPerClient: true,
+  messages: {
+    perClient: "生成次数较多，请稍后再试。",
+    daily: "今日 Fun-Music 体验额度已用完，将尝试智能音符背景。",
+    concurrency: "当前生成任务较多，请稍后再试。",
+    inFlight: "已有一首 AI 背景正在生成，请完成后再试。",
+  },
+} as const;
 
 function normalizeAudioUrl(value: string) {
   try {

@@ -56,7 +56,7 @@ export const HOME_PAGE_MOCK = {
     diary: {
       eyebrow: "READ A SOUND DIARY",
       title: "声音日记从哪里来？",
-      description: "拍摄或选择真实照片。取得图片后，才进入采样、识别与六字段确认。",
+      description: "拍摄或选择真实照片。取得图片后，才进入采样、识别与声音配方。",
       actionLabel: "进入采样与转译",
       options: [
         { id: "camera", emoji: "📷", title: "拍一张照片", englishTitle: "TAKE A PHOTO", description: "使用设备相机拍下纸质声卡" },

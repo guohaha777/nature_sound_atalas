@@ -3,14 +3,19 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { useExperience } from "@/src/app";
-import { FIELD_LABELS, type PitchChoice } from "@/src/domain/sound-card";
-import { listEligibleSoundWorldItems, WORLD_LAST_BEAT } from "@/src/features/sound-world";
+import { DEFAULT_COMPOSITION_DURATION_SECONDS } from "@/src/domain/composition";
+import { FIELD_LABELS, INPUT_MODE_LABELS, type PitchChoice } from "@/src/domain/sound-card";
+import { pitchBandFromSemitoneShift } from "@/src/domain/music-mapping/mappingRulesV1";
+import { listEligibleSoundWorldItems, listOversizedSourceEvents, readEventSourceClip, selectedPaperCardUnitIds, WORLD_LAST_BEAT } from "@/src/features/sound-world";
 import { clampEmotionCoordinate, resolveEmotionSelection } from "@/src/features/composition-emotion";
 import { buildCompositionPlaybackTimeline } from "@/src/features/composition-playback";
 import type { MockSoundCard } from "@/src/mocks/mockData";
 import { PageShell } from "@/src/components/navigation";
+import { GenerationProgress } from "@/src/components/feedback";
+import { AudioClipEditor } from "@/src/components/audio";
 import { isUserAddedSound, SoundCreature, SoundIdentityGlyph } from "@/src/components/sound";
 import { usePageRouter } from "@/src/features/page-transition";
+import { parseLibrarySelection, selectedLibraryUnitIds } from "@/src/features/library-selection/librarySelection";
 
 type Scope = "mine" | "class";
 type EventPlacement = { eventId: string; startBeat: number; pitch: PitchChoice };
@@ -20,7 +25,7 @@ const PITCH_TOP = { high: 18, mid: 49, low: 78 } as const;
 export function SoundWorldPage() {
   const router = usePageRouter();
   const search = useSearchParams();
-  const { audioAssets, cards, composition, units, hydrated, setActiveUnits, playCard, playComposition, pausePlayback, playback, polishErrorMessage, generatePolish, dismissPolishFailure, togglePolish, moveWorldEvent, duplicateWorldEvent, deleteWorldEvent, setCompositionEmotion, setCompositionEmotionPoint } = useExperience();
+  const { audioAssets, audioPlaybackUrls, cards, composition, units, hydrated, setActiveUnits, playCard, playComposition, pausePlayback, playback, polishErrorMessage, generatePolish, dismissPolishFailure, togglePolish, moveWorldEvent, duplicateWorldEvent, deleteWorldEvent, updateWorldEventClip, setCompositionEmotion, setCompositionEmotionPoint } = useExperience();
   const initialized = useRef(false);
   const fieldRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<{ eventId: string; pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
@@ -30,11 +35,13 @@ export function SoundWorldPage() {
   const owners = useMemo(() => Array.from(new Set(eligibleItems.map((item) => (item.card as MockSoundCard).owner).filter((name) => name !== "系统"))), [eligibleItems]);
   const focusCardId = search.get("focus");
   const entrySource = search.get("source");
+  const librarySelection = parseLibrarySelection(search.get("batch"));
   const focusCard = cards.find((card) => card.id === focusCardId) as MockSoundCard | undefined;
   const [scope, setScope] = useState<Scope>("class");
   const [owner, setOwner] = useState(focusCard?.owner ?? owners[0] ?? "小雨");
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(focusCardId);
   const [openEventMenu, setOpenEventMenu] = useState<string | null>(null);
+  const [clipEditorEventId, setClipEditorEventId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<EventPlacement | null>(null);
   const [scorePlaybackActive, setScorePlaybackActive] = useState(false);
   const [emotionDialogOpen, setEmotionDialogOpen] = useState(false);
@@ -46,18 +53,25 @@ export function SoundWorldPage() {
   useEffect(() => {
     if (!hydrated || initialized.current || eligibleItems.length === 0) return;
     initialized.current = true;
+    if (entrySource === "library" && librarySelection.length > 0) {
+      const ids = selectedLibraryUnitIds(librarySelection, eligibleItems.map((item) => item.unit));
+      if (ids.length > 0) {
+        setActiveUnits(ids);
+        return;
+      }
+    }
     if (focusCardId) {
       const focused = eligibleItems.find((item) => item.card.id === focusCardId);
       if (focused) {
-        const ids = entrySource === "card" && focused.unit.inputMode === "paper_card"
-          ? eligibleItems.filter((item) => item.card.paperCardId === focused.card.paperCardId).map((item) => item.unit.id)
+        const ids = entrySource === "card"
+          ? selectedPaperCardUnitIds(focusCardId, eligibleItems)
           : [focused.unit.id];
         setActiveUnits(ids);
         return;
       }
     }
     if (!composition) setActiveUnits(eligibleItems.filter((item) => item.unit.active).slice(0, 3).map((item) => item.unit.id));
-  }, [composition, eligibleItems, entrySource, focusCardId, hydrated, setActiveUnits]);
+  }, [composition, eligibleItems, entrySource, focusCardId, hydrated, librarySelection, setActiveUnits]);
 
   useEffect(() => {
     const pendingDrop = pendingDropRef.current;
@@ -74,10 +88,23 @@ export function SoundWorldPage() {
     const item = eligibleItems.find((candidate) => candidate.unit.id === id);
     return item ? [item] : [];
   });
-  const scoreEvents = composition?.events.filter((event) => selectedSet.has(event.soundUnitId)) ?? [];
+  const worldMaxBeat = composition
+    ? Math.max(1, composition.durationSeconds * composition.bpm / 60)
+    : WORLD_LAST_BEAT;
+  const scoreEvents = composition?.events.filter((event) => (
+    selectedSet.has(event.soundUnitId)
+    && event.generatedBy !== "deterministic-arranger-v2"
+    && event.generatedBy !== "natural-sound-continuity-v1"
+  )) ?? [];
   const historyItems = eligibleItems.filter((item) => isUserAddedSound(item.unit, item.asset));
   const systemItems = eligibleItems.filter((item) => !isUserAddedSound(item.unit, item.asset));
   const selectedArchiveItem = eligibleItems.find((item) => item.unit.id === selectedUnitId || item.card.id === selectedUnitId) ?? null;
+  const oversizedSources = listOversizedSourceEvents(composition, audioAssets).flatMap((notice) => {
+    const item = eligibleItems.find((candidate) => candidate.unit.id === notice.soundUnitId);
+    return item ? [{ ...notice, displayName: (item.card as MockSoundCard).displayName ?? item.card.source.label }] : [];
+  });
+  const clipEditorEvent = scoreEvents.find((event) => event.id === clipEditorEventId) ?? null;
+  const clipEditorItem = clipEditorEvent ? eligibleItems.find((item) => item.unit.id === clipEditorEvent.soundUnitId) ?? null : null;
 
   const setSelection = (ids: string[]) => setActiveUnits(Array.from(new Set(ids)));
   const previewArchiveItem = (item: (typeof eligibleItems)[number]) => {
@@ -104,7 +131,7 @@ export function SoundWorldPage() {
     const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
     return {
-      startBeat: Math.round(x * WORLD_LAST_BEAT * 2) / 2,
+      startBeat: Math.round(x * worldMaxBeat * 2) / 2,
       pitch: (y < 0.33 ? "high" : y < 0.66 ? "mid" : "low") as PitchChoice,
     };
   };
@@ -145,7 +172,7 @@ export function SoundWorldPage() {
       return;
     }
     setScorePlaybackActive(true);
-    void playComposition({ includePolish: false });
+    void playComposition({ includePolish: false, excludeGeneratedSupport: true });
   };
   const openEmotionDialog = () => {
     if (selectedItems.length < 1) return;
@@ -213,10 +240,10 @@ export function SoundWorldPage() {
     router.push("/compose");
   };
 
-  const currentScoreBeat = Math.min(WORLD_LAST_BEAT, playback.currentTime * ((composition?.bpm ?? 88) / 60));
-  const scorePlayheadLeft = 6 + (currentScoreBeat / WORLD_LAST_BEAT) * 88;
-  const worldTimeline = buildCompositionPlaybackTimeline(composition, audioAssets, WORLD_LAST_BEAT);
-  const triggerWindowSeconds = WORLD_LAST_BEAT * (60 / (composition?.bpm ?? 88));
+  const currentScoreBeat = Math.min(worldMaxBeat, playback.currentTime * ((composition?.bpm ?? 88) / 60));
+  const scorePlayheadLeft = 6 + (currentScoreBeat / worldMaxBeat) * 88;
+  const worldTimeline = buildCompositionPlaybackTimeline(composition, audioAssets, worldMaxBeat);
+  const triggerWindowSeconds = worldMaxBeat * (60 / (composition?.bpm ?? 88));
   const tailPlaying = scorePlaybackActive && playback.status === "playing" && playback.activeCompositionEventIds.length > 0 && playback.currentTime > triggerWindowSeconds && playback.currentTime < worldTimeline.audibleDurationSeconds;
   const emotionSelection = resolveEmotionSelection(draftEmotion.valence, draftEmotion.arousal);
 
@@ -244,16 +271,18 @@ export function SoundWorldPage() {
               const displayName = card.displayName ?? card.source.label;
               const preview = dragPreview?.eventId === scoreEvent.id ? dragPreview : null;
               const startBeat = preview?.startBeat ?? scoreEvent.startBeat;
-              const pitch = preview?.pitch ?? (scoreEvent.semitoneShift >= 4 ? "high" : scoreEvent.semitoneShift <= -4 ? "low" : "mid");
+              const pitch = preview?.pitch ?? pitchBandFromSemitoneShift(scoreEvent.semitoneShift);
               const samePosition = scoreEvents.filter((candidate) => candidate.id !== scoreEvent.id && candidate.startBeat === scoreEvent.startBeat && candidate.semitoneShift === scoreEvent.semitoneShift);
               const overlapIndex = samePosition.filter((candidate) => candidate.id < scoreEvent.id).length;
               const occurrenceIndex = scoreEvents.filter((candidate) => candidate.soundUnitId === scoreEvent.soundUnitId).findIndex((candidate) => candidate.id === scoreEvent.id) + 1;
               const activeSound = scorePlaybackActive && playback.activeCompositionEventIds.includes(scoreEvent.id);
-              const capsuleWidth = scoreEvent.durationBeats <= 0.5 ? 58 : scoreEvent.durationBeats <= 1 ? 82 : Math.min(142, 82 + scoreEvent.durationBeats * 18);
+              const sourceClip = readEventSourceClip(scoreEvent, item.asset);
+              const capsuleWidthPercent = Math.min(88, sourceClip.durationSeconds / Math.max(1, composition?.durationSeconds ?? DEFAULT_COMPOSITION_DURATION_SECONDS) * 88);
+              const preferredLeft = `calc(${6 + (startBeat / worldMaxBeat) * 88}% + ${overlapIndex * 10}px)`;
               const userAdded = isUserAddedSound(item.unit, item.asset);
-              return <article className={`field-being field-occurrence is-included ${activeSound ? "is-playing" : ""}`} style={{ left: `calc(${6 + (startBeat / WORLD_LAST_BEAT) * 88}% + ${overlapIndex * 10}px)`, top: `${PITCH_TOP[pitch]}%`, "--being-color": card.color, "--being-width": `${capsuleWidth}px`, "--being-height": "58px" } as React.CSSProperties} key={scoreEvent.id}>
-                <button className="field-being__body" onPointerDown={(event) => startEventDrag(event, scoreEvent.id)} onPointerMove={moveEventDrag} onPointerUp={finishEventDrag} onPointerCancel={finishEventDrag} onClick={(event) => { event.stopPropagation(); if (draggedEventRef.current === scoreEvent.id) { draggedEventRef.current = null; return; } previewArchiveItem(item); }} aria-label={`拖动或试听${displayName}，第${occurrenceIndex}次出现`}><SoundIdentityGlyph userAdded={userAdded}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={activeSound} size="small" /></SoundIdentityGlyph></button>
-                <span>{displayName} · {occurrenceIndex}</span>
+              return <article className={`field-being field-occurrence is-included ${activeSound ? "is-playing" : ""}`} style={{ left: `clamp(12px, ${preferredLeft}, calc(100% - var(--being-width) - 12px))`, top: `${PITCH_TOP[pitch]}%`, "--being-color": card.color, "--being-width": `clamp(44px, ${capsuleWidthPercent}%, calc(100% - 24px))`, "--being-height": "58px" } as React.CSSProperties} key={scoreEvent.id}>
+                <button className="field-being__body" onPointerDown={(event) => startEventDrag(event, scoreEvent.id)} onPointerMove={moveEventDrag} onPointerUp={finishEventDrag} onPointerCancel={finishEventDrag} onClick={(event) => { event.stopPropagation(); if (draggedEventRef.current === scoreEvent.id) { draggedEventRef.current = null; return; } setClipEditorEventId(scoreEvent.id); }} aria-label={`拖动${displayName}或点击编辑声音片段，第${occurrenceIndex}次出现`}><SoundIdentityGlyph userAdded={userAdded}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={activeSound} size="small" /></SoundIdentityGlyph></button>
+                <span>{displayName} · {sourceClip.durationSeconds.toFixed(1)}秒</span>
                 <button className="field-being__menu-trigger" onClick={(event) => { event.stopPropagation(); setOpenEventMenu(openEventMenu === scoreEvent.id ? null : scoreEvent.id); }} aria-label={`编辑${displayName}的这个声音点`}>•••</button>
                 {openEventMenu === scoreEvent.id && <div className="field-being__menu"><button onClick={() => { duplicateWorldEvent(scoreEvent.id); setOpenEventMenu(null); }}>复制声音点</button><button onClick={() => { deleteWorldEvent(scoreEvent.id); setOpenEventMenu(null); }}>删除声音点</button></div>}
               </article>;
@@ -278,9 +307,14 @@ export function SoundWorldPage() {
               })}</div>
             </details>)}
           </div>
-          {selectedArchiveItem ? <Inspector item={selectedArchiveItem} playing={playback.status === "playing" && playback.activeSoundUnitIds.includes(selectedArchiveItem.unit.id)} onPlay={() => previewArchiveItem(selectedArchiveItem)} /> : <div className="sound-inspector__empty"><span>{String(eligibleItems.length).padStart(2, "0")}</span><h2>试听一个声音</h2><p>这里会显示贡献者、原卡、原声和六字段。</p></div>}
+          {selectedArchiveItem ? <Inspector item={selectedArchiveItem} playing={playback.status === "playing" && playback.activeSoundUnitIds.includes(selectedArchiveItem.unit.id)} onPlay={() => previewArchiveItem(selectedArchiveItem)} /> : <div className="sound-inspector__empty"><span>{String(eligibleItems.length).padStart(2, "0")}</span><h2>试听一个声音</h2><p>这里会显示贡献者、原卡、原声和声音配方。</p></div>}
         </aside>
       </div>
+
+      {oversizedSources.length > 0 && <div className="world-oversized-note" role="status">
+        <strong>有声音比这首作品还长</strong>
+        <p>{oversizedSources.map((notice) => `「${notice.displayName}」原声 ${notice.sourceDurationSeconds.toFixed(1)} 秒`).join("、")}，当前作品约 {Math.round(composition?.durationSeconds ?? 0)} 秒，现在先用开头的一段。点击这个声音胶囊，可以{oversizedSources[0].suggestedDurationSeconds ? `换成约 ${oversizedSources[0].suggestedDurationSeconds} 秒的作品` : "换成更长的作品"}，或自己截取想保留的一段。</p>
+      </div>}
 
       {composition?.contextAnalysis?.notice && <p className="world-listening-note" role="status"><strong>先听一听：</strong>{composition.contextAnalysis.notice}</p>}
 
@@ -293,9 +327,23 @@ export function SoundWorldPage() {
 
       {emotionDialogOpen && <div className="emotion-gate-backdrop" role="presentation"><section className="emotion-gate-dialog" role="dialog" aria-modal="true" aria-labelledby="emotion-gate-title"><span>OPTIONAL EMOTION / 整首作品只选一次</span><h2 id="emotion-gate-title">要给这首作品一个情绪方向吗？</h2><p>可以直接在四象限中点击或拖动圆点；这只引导整首作品和 AI 垫音，不改变任何单个声音。</p><button className="emotion-gate-map" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); updateDraftEmotionFromPoint(event.clientX, event.clientY, event.currentTarget); }} onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) updateDraftEmotionFromPoint(event.clientX, event.clientY, event.currentTarget); }} onKeyDown={nudgeDraftEmotion} aria-label="情绪四象限，方向键微调，Shift加方向键大幅调整"><span className="emotion-gate-map__top">激动</span><span className="emotion-gate-map__bottom">平静</span><span className="emotion-gate-map__left">不开心</span><span className="emotion-gate-map__right">开心</span><i style={{ left: `${((draftEmotion.valence + 1) / 2) * 100}%`, top: `${((1 - draftEmotion.arousal) / 2) * 100}%` }} /></button><div className="emotion-gate-result"><small>最终生曲关键词</small><strong>{draftEmotionSelected ? emotionSelection.keyword : "尚未选择 · 可以跳过"}</strong><span>{draftEmotionSelected ? emotionSelection.note : "跳过后只按04的声音编排生成基础作品"}</span></div><div className="emotion-gate-actions"><button onClick={() => setEmotionDialogOpen(false)}>返回声场</button><button onClick={() => void skipEmotion()}>跳过情绪</button><button className="is-primary" disabled={!draftEmotionSelected} onClick={() => void confirmEmotion()}>使用这个情绪 · 生成曲子</button></div></section></div>}
 
-      {preparingBackground && <div className="polish-failure-backdrop" role="presentation"><section className="polish-failure-dialog" role="status"><span>CREATING / 正在生成</span><h2>正在为这首作品准备背景音乐…</h2><p>先尝试音乐模型。请稍候，儿童的原声和编排不会被改变。</p></section></div>}
+      {preparingBackground && <div className="polish-failure-backdrop" role="presentation">
+        <GenerationProgress compositionDurationSeconds={composition?.durationSeconds ?? DEFAULT_COMPOSITION_DURATION_SECONDS} title="正在为这首作品配背景" />
+      </div>}
 
       {backgroundFailureOpen && <div className="polish-failure-backdrop" role="presentation"><section className="polish-failure-dialog" role="dialog" aria-modal="true" aria-labelledby="pre-compose-failure-title"><span>MUSIC MODEL / 暂未连接</span><h2 id="pre-compose-failure-title">音乐模型暂时没有生成成功</h2><p>{polishErrorMessage ?? "暂时无法连接音乐模型。"}</p><p>可以改用智能音符方案继续生成背景，不影响孩子采集的原声。</p><div><button onClick={() => void retryMusicModel()}>重试音乐模型</button><button className="is-primary" onClick={() => void selectPlanB()}>使用 Plan B · 智能音符方案</button><button onClick={continueWithoutBackground}>只听儿童声音</button></div></section></div>}
+
+      {clipEditorEvent && clipEditorItem && <AudioClipEditor
+        key={clipEditorEvent.id}
+        event={clipEditorEvent}
+        asset={clipEditorItem.asset}
+        playbackUrl={audioPlaybackUrls[clipEditorItem.asset.id] ?? clipEditorItem.asset.storageRef}
+        title={(clipEditorItem.card as MockSoundCard).displayName ?? clipEditorItem.card.source.label}
+        color={(clipEditorItem.card as MockSoundCard).color}
+        compositionDurationSeconds={composition?.durationSeconds ?? DEFAULT_COMPOSITION_DURATION_SECONDS}
+        onClose={() => setClipEditorEventId(null)}
+        onSave={(selection, options) => { updateWorldEventClip(clipEditorEvent.id, selection, options); setClipEditorEventId(null); }}
+      />}
     </PageShell>
   );
 }
@@ -306,7 +354,7 @@ function Inspector({ item, playing, onPlay }: { item: ReturnType<typeof listElig
   return <div className="sound-inspector__detail sound-inspector__detail--compact">
     <header><span style={{ background: card.color }}>{isUserAddedSound(item.unit, item.asset) ? "🌟" : card.ownerInitials}</span><div><small>SOUNDUNIT / 声音档案</small><h2>{displayName}</h2></div></header>
     <section><strong>{item.unit.provenance.contributorName} 的声音</strong><p>{item.unit.provenance.place} · {item.unit.provenance.recordedAt}</p><p>原卡：{item.unit.provenance.originalCardAssetId ?? "来自录音或声音库"}</p><p>原声：{item.asset.label} · {item.unit.originalAudioAssetId}</p></section>
-    <dl><div><dt>音高</dt><dd>{FIELD_LABELS.pitch[item.unit.parameters.pitch]}</dd></div><div><dt>时长</dt><dd>{FIELD_LABELS.duration[item.unit.parameters.duration]}</dd></div><div><dt>轮廓</dt><dd>{FIELD_LABELS.contour[item.unit.parameters.contour]}</dd></div><div><dt>力度</dt><dd>{FIELD_LABELS.intensity[item.unit.parameters.intensity]}</dd></div><div><dt>节奏</dt><dd>{FIELD_LABELS.pattern[item.unit.parameters.pattern]}</dd></div><div><dt>来源</dt><dd>{item.unit.inputMode}</dd></div></dl>
+    <dl><div><dt>高低</dt><dd>{FIELD_LABELS.pitch[item.unit.parameters.pitch]}</dd></div><div><dt>长短</dt><dd>{FIELD_LABELS.duration[item.unit.parameters.duration]}</dd></div><div><dt>声音变化</dt><dd>{FIELD_LABELS.contour[item.unit.parameters.contour]}</dd></div><div><dt>强弱</dt><dd>{FIELD_LABELS.intensity[item.unit.parameters.intensity]}</dd></div><div><dt>出现方式</dt><dd>{FIELD_LABELS.pattern[item.unit.parameters.pattern]}</dd></div><div><dt>声音来源</dt><dd>{INPUT_MODE_LABELS[item.unit.inputMode]}</dd></div></dl>
     <button className="inspector-play" onClick={onPlay}>{playing ? "暂停 / PAUSE" : "单独试听 / PLAY"} <span>{playing ? "❚❚" : "▶"}</span></button>
   </div>;
 }

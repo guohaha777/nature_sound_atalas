@@ -18,8 +18,9 @@ export function buildCompositionPlaybackTimeline(
 ): CompositionPlaybackTimeline {
   if (!composition) return { maxBeat: minimumBeat, arrangementDurationSeconds: 0, audibleDurationSeconds: 0 };
   const secondsPerBeat = 60 / composition.bpm;
-  const maxBeat = Math.max(minimumBeat, ...composition.events.map((event) => event.startBeat + event.durationBeats));
-  const arrangementDurationSeconds = maxBeat * secondsPerBeat;
+  const targetBeat = composition.durationSeconds / secondsPerBeat;
+  const maxBeat = Math.max(minimumBeat, targetBeat, ...composition.events.map((event) => event.startBeat + event.durationBeats));
+  const arrangementDurationSeconds = composition.durationSeconds;
   void assets;
   const audibleDurationSeconds = composition.durationSeconds;
   return { maxBeat, arrangementDurationSeconds, audibleDurationSeconds };

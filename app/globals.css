@@ -255,18 +255,25 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .player-card__body { padding: 28px; }
 .player-title { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .player-title h2 { margin: 3px 0 0; font-size: 27px; }
-.audio-transport { display: flex; align-items: center; gap: 15px; margin: 26px 0 18px; }
-.audio-transport__button { width: 58px; height: 58px; flex: 0 0 auto; display: grid; place-items: center; color: white; background: var(--orange); border: 0; border-radius: 50%; cursor: pointer; box-shadow: 0 6px 0 #8a4f37; }
-.play-icon { width: 0; height: 0; margin-left: 4px; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 13px solid white; }
-.pause-icon { width: 13px; height: 16px; border-left: 4px solid white; border-right: 4px solid white; }
-.audio-transport__timeline { flex: 1; min-width: 0; }
-.audio-transport__meta { display: flex; justify-content: space-between; gap: 20px; color: var(--ink-soft); font-size: 11px; }
-.audio-transport__track { height: 7px; margin-top: 8px; overflow: hidden; background: #ded9ce; border-radius: 99px; }
-.audio-transport__track span { display: block; height: 100%; background: var(--orange); border-radius: inherit; transition: width .12s linear; }
+/* Playback transport — minimal, shares the atlas frame language (square, 1px ink, accent fill). */
+.audio-transport { display: flex; align-items: stretch; gap: 14px; margin: 20px 0 12px; }
+.audio-transport__button { width: 52px; min-height: 52px; flex: 0 0 auto; display: grid; place-items: center; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: 0; box-shadow: none; cursor: pointer; transition: background .18s ease, border-color .18s ease; }
+.audio-transport__button:not(:disabled):hover { background: var(--accent); border-color: var(--accent); }
+.play-icon { width: 0; height: 0; margin-left: 3px; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 12px solid currentColor; }
+.pause-icon { width: 12px; height: 14px; border-left: 4px solid currentColor; border-right: 4px solid currentColor; }
+.audio-transport__timeline { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 9px; }
+.audio-transport__meta { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; color: var(--ink-faint); font-size: 9px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.audio-transport__meta span:last-child { flex: 0 0 auto; color: var(--ink-soft); font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: none; font-variant-numeric: tabular-nums; }
+.audio-transport__track { width: 100%; height: 16px; display: block; padding: 0; appearance: none; border: 1px solid var(--ink); border-radius: 0; background: linear-gradient(to right, var(--accent) 0 var(--transport-progress,0%), var(--card,#fbfaf5) var(--transport-progress,0%) 100%); cursor: ew-resize; }
+.audio-transport__track::-webkit-slider-runnable-track { height: 100%; border: 0; background: transparent; }
+.audio-transport__track::-moz-range-track { height: 100%; border: 0; background: transparent; }
+.audio-transport__track::-webkit-slider-thumb { width: 3px; height: 14px; appearance: none; border: 0; border-radius: 0; background: var(--ink); box-shadow: none; cursor: ew-resize; }
+.audio-transport__track::-moz-range-thumb { width: 3px; height: 14px; border: 0; border-radius: 0; background: var(--ink); box-shadow: none; cursor: ew-resize; }
+.audio-transport__track:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.audio-transport__track:disabled { opacity: .38; cursor: not-allowed; }
 .audio-transport__track--marked { position: relative; overflow: visible; }
-.audio-transport__track--marked > span { overflow: hidden; }
 .audio-transport__track--marked > i { position: absolute; top: -4px; width: 1px; height: 15px; background: var(--ink); pointer-events: none; }
-.audio-transport__durations { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; color: var(--ink-faint); font-size: 9px; }
+.audio-transport__durations { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; color: var(--ink-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
 .layer-toggle { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; background: #e8e4da; border-radius: 999px; }
 .layer-toggle button { min-height: 42px; padding: 7px 12px; border: 0; background: transparent; border-radius: 999px; cursor: pointer; font-size: 12px; }
 .layer-toggle button.is-selected { background: white; box-shadow: var(--shadow-soft); font-weight: 750; }

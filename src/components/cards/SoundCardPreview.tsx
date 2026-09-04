@@ -13,7 +13,7 @@ export function SoundCardPreview({ card, selected = false, onClick }: { card: Mo
         <span className="eyebrow">示例声卡 · 儿童记录</span>
         <h3>{card.source.label}</h3>
         <p>{card.childNote}</p>
-        <div className="field-chips" aria-label="六字段摘要">
+        <div className="field-chips" aria-label="声音配方摘要">
           <span>{FIELD_LABELS.pitch[card.pitch]}</span>
           <span>{FIELD_LABELS.duration[card.duration]}</span>
           <span>{FIELD_LABELS.contour[card.contour]}</span>

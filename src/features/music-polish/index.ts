@@ -1,7 +1,10 @@
 export * from "./contracts";
-export { buildFunMusicPromptV1 } from "./prompts/funMusicPromptV1";
-export { buildFunMusicPromptV2, FUN_MUSIC_PROMPT_VERSION } from "./prompts/funMusicPromptV2";
-export { buildSymbolicMusicPlanPrompt } from "./prompts/symbolicMusicPlanPrompt";
+export * from "./generationProgress";
 export * from "./rules/buildMusicPolishBrief";
 export * from "./rules/buildDeterministicSymbolicPlan";
 export * from "./rules/deriveMusicPolishDirection";
+export * from "./rules/deriveBackgroundVoicing";
+export * from "./rules/derivePitchMaterial";
+export * from "./rules/developMusicIdea";
+export * from "./rules/validateBackgroundArrangement";
+export * from "./rules/repairBackgroundArrangement";

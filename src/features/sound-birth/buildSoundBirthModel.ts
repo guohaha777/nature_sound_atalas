@@ -108,7 +108,7 @@ function describeSource(unit: SoundUnit, asset: OriginalAudioAsset) {
     return { sourceTitle: "原始现场录音", sourceDescription: `${unit.provenance.contributorName} · ${unit.provenance.place} · ${asset.label}`, sourceBadge: "个人原声" };
   }
   if (asset.kind === "sound_library") {
-    return { sourceTitle: "声音库原始素材", sourceDescription: `${asset.label} · 播放时按声卡参数塑形`, sourceBadge: "不可变原声" };
+    return { sourceTitle: "声音库原始素材", sourceDescription: `${asset.label} · 播放时按声音配方塑形`, sourceBadge: "不可变原声" };
   }
   return { sourceTitle: "系统授权原声", sourceDescription: `${asset.label} · 只保存原声，声卡效果属于贡献者档案`, sourceBadge: "不可变原声" };
 }

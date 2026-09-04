@@ -4,7 +4,7 @@
 
 ## 正式声卡
 
-逐项替换 `MOCK_SOUND_CARDS`，保留六字段枚举和 `templateVersion`。正式数据建议由 manifest adapter 读取，而不是继续写进页面。
+逐项替换 `MOCK_SOUND_CARDS`，保留声音配方枚举和 `templateVersion`。正式数据建议由 manifest adapter 读取，而不是继续写进页面。
 
 ## 正式原声
 
@@ -17,7 +17,7 @@
 
 ## AI 接入状态
 
-当前 `CompositionRoot` 已接入真实的 `FunMusicPolishGenerator` 和 `HybridCompositionAdvisor`。`MockPolishGenerator` 仅保留为开发测试适配器，不再是公开版本的默认路径。联网模型通过服务端环境变量启用，未配置或调用失败时使用明确标记的本地降级结果。后续替换模型仍必须保持：
+当前 `CompositionRoot` 已接入真实的 `AceStepPolishGenerator`（本机 ACE-Step 的 lego 任务，先把孩子的编排离线渲染成混音再送给模型，所以背景听得见原声）和 `HybridCompositionAdvisor`。`FunMusicPolishGenerator` 已不在默认路径上。`MockPolishGenerator` 仅保留为开发测试适配器，不再是公开版本的默认路径。联网模型通过服务端环境变量启用，未配置或调用失败时使用明确标记的本地降级结果。后续替换模型仍必须保持：
 
 - `live_ai`、`cached_demo_ai`、`local_fallback` 三种来源真实标记；
 - 原声和 AI 背景进入独立 bus；

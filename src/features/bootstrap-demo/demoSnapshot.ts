@@ -1,4 +1,6 @@
 import type { DemoSnapshot } from "@/src/features/ports";
+import { normalizeEditableSourceClips } from "@/src/features/sound-world";
+import { alignCompositionDurationToOptions } from "@/src/features/composition-duration";
 import { MOCK_ORIGINAL_AUDIO_ASSETS, MOCK_PAPER_SOUND_CARDS, MOCK_PROJECT, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS, type MockSoundCard } from "@/src/mocks/mockData";
 
 export function createInitialDemoSnapshot(): DemoSnapshot {
@@ -58,7 +60,7 @@ export function normalizeDemoSnapshot(stored: DemoSnapshot): DemoSnapshot {
   const basePaperCardIds = new Set(initial.paperCards.map((card) => card.id));
   const paperCards = [...initial.paperCards, ...storedPaperCards.filter((card) => !basePaperCardIds.has(card.id))];
   const previousComposition = partial.composition;
-  const composition = previousComposition ? {
+  const compositionBase = previousComposition ? {
     ...previousComposition,
     projectId: initial.project.id,
     events: previousComposition.events.map((event) => ({
@@ -68,6 +70,7 @@ export function normalizeDemoSnapshot(stored: DemoSnapshot): DemoSnapshot {
     emotionIntent: previousComposition.emotionIntent ?? { enabled: false, valence: 0, arousal: 0, label: null, mappingVersion: "emotion-mapping-v1" as const },
     seed: previousComposition.seed ?? "demo-arrangement-v1",
   } : null;
+  const composition = compositionBase ? normalizeEditableSourceClips(alignCompositionDurationToOptions(compositionBase), audioAssets) : null;
   const archivedCompositions = (Array.isArray(partial.archivedCompositions)
     ? partial.archivedCompositions
     : composition?.savedAt ? [composition] : [])

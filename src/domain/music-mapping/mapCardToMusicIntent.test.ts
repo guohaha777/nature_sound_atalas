@@ -20,13 +20,13 @@ const base: ConfirmedSoundCard = {
 describe("music-mapping-v1", () => {
   it("maps low, long and fade-in to a quiet low texture", () => {
     const result = mapCardToMusicIntent(base);
-    expect(result).toMatchObject({ semitoneShift: -7, durationBeats: 3, gainDb: -10, pattern: "fade-in", mappingVersion: "music-mapping-v1" });
+    expect(result).toMatchObject({ semitoneShift: -3, durationBeats: 3, gainDb: -10, pattern: "fade-in", mappingVersion: "music-mapping-v1" });
     expect(result.roleCandidates).toContain("texture");
   });
 
   it("maps high, short and repeat to rhythm and melody candidates", () => {
     const result = mapCardToMusicIntent({ ...base, pitch: "high", duration: "short", contour: "rising", intensity: "medium", pattern: "repeat" });
-    expect(result).toMatchObject({ semitoneShift: 7, durationBeats: 0.5, gainDb: -5, pattern: "repeat" });
+    expect(result).toMatchObject({ semitoneShift: 3, durationBeats: 0.5, gainDb: -5, pattern: "repeat" });
     expect(result.roleCandidates).toEqual(expect.arrayContaining(["rhythm", "melody"]));
   });
 

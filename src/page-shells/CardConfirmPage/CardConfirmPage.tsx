@@ -1,25 +1,30 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useExperience } from "@/src/app";
-import type { ConfirmedSoundCard } from "@/src/domain/sound-card";
+import { explainCard, type ConfirmedSoundCard } from "@/src/domain/sound-card";
 import { FIELD_OPTIONS } from "@/src/mocks/mockData";
 import { PageShell } from "@/src/components/navigation";
 import { isUserAddedSound, SoundCreature, SoundIdentityGlyph } from "@/src/components/sound";
 import { usePageRouter } from "@/src/features/page-transition";
 import { buildRecognitionAssessment } from "@/src/features/teaching-agent";
+import { librarySelectionProgress, nextSelectedCardId, parseLibrarySelection, serializeLibrarySelection } from "@/src/features/library-selection/librarySelection";
 
 export function CardConfirmPage() {
   const params = useParams<{ id: string }>();
   const search = useSearchParams();
   const router = usePageRouter();
-  const { audioAssets, bindCardToLibrarySource, cards, currentCard, paperCards, playCard, playback, recordings, selectCard, units, updateCurrentCard, confirmCurrentCard } = useExperience();
+  const { audioAssets, bindCardToLibrarySource, cards, currentCard, pausePlayback, playCard, playback, recordings, selectCard, units, updateCurrentCard, confirmCurrentCard } = useExperience();
   const card = cards.find((item) => item.id === params.id) ?? currentCard;
   const cardUnit = units.find((item) => item.cardId === card.id);
   const sourcePlaying = playback.status === "playing" && Boolean(cardUnit && playback.activeSoundUnitIds.includes(cardUnit.id));
   const source = search.get("source") ?? "card";
   const capture = search.get("capture") === "upload" ? "upload" : "camera";
+  const librarySelection = parseLibrarySelection(search.get("batch"));
+  const selectionProgress = librarySelectionProgress(librarySelection, card.id);
+  const batchValue = serializeLibrarySelection(librarySelection);
+  const [useCardParameters, setUseCardParameters] = useState(true);
   const unit = units.find((item) => item.cardId === card.id);
   const selectedAsset = audioAssets.find((asset) => asset.id === unit?.originalAudioAssetId);
   const userAddedSource = unit ? isUserAddedSound(unit, selectedAsset) : false;
@@ -28,9 +33,20 @@ export function CardConfirmPage() {
     ? `recording:${unit.originalAudioAssetId.slice("audio-".length)}`
     : card.sourceSelectionRequired ? "" : `asset:${unit?.originalAudioAssetId ?? ""}`;
   const recognition = buildRecognitionAssessment(card);
+  const childTip = explainCard(card);
+  const nextLibraryCardId = source === "library" ? nextSelectedCardId(librarySelection, card.id) : null;
+  const nextPaperDraft = source === "card" ? cards.find((item) => item.paperCardId === card.paperCardId && item.id !== card.id && item.confirmedAt === "paper-draft") : null;
+  const preparing = playback.status === "loading";
   useEffect(() => { if (params.id && currentCard.id !== params.id) selectCard(params.id); }, [currentCard.id, params.id, selectCard]);
 
-  const setField = (field: keyof Pick<ConfirmedSoundCard, "pitch" | "duration" | "contour" | "intensity" | "pattern">, value: string) => updateCurrentCard({ [field]: value });
+  const setField = (field: keyof Pick<ConfirmedSoundCard, "pitch" | "duration" | "contour" | "intensity" | "pattern">, value: string) => {
+    if (sourcePlaying) pausePlayback();
+    updateCurrentCard({ [field]: value });
+  };
+  const choosePreviewMode = (enabled: boolean) => {
+    if (sourcePlaying) pausePlayback();
+    setUseCardParameters(enabled);
+  };
   const chooseSource = (value: string) => {
     const [kind, id] = value.split(":", 2);
     if (kind === "asset" && id) bindCardToLibrarySource(card.id, { kind: "asset", id });
@@ -52,23 +68,26 @@ export function CardConfirmPage() {
   const finish = () => {
     if (card.sourceSelectionRequired) return;
     confirmCurrentCard(card.id);
-    const nextDraft = cards.find((item) => item.paperCardId === card.paperCardId && item.id !== card.id && item.confirmedAt === "paper-draft");
-    if (nextDraft) {
-      router.push(`/cards/${nextDraft.id}/confirm?entry=diary&source=card&capture=${capture}`);
+    if (nextLibraryCardId) {
+      router.push(`/cards/${nextLibraryCardId}/confirm?entry=record&source=library&batch=${encodeURIComponent(batchValue)}`);
       return;
     }
-    const paperCard = source === "card" ? paperCards.find((item) => item.id === card.paperCardId) : null;
-    const firstCardId = paperCard?.entryIds[0] ?? card.id;
-    router.push(`/sounds/${firstCardId}/birth?source=${source}&capture=${capture}`);
+    if (nextPaperDraft) {
+      router.push(`/cards/${nextPaperDraft.id}/confirm?entry=diary&source=card&capture=${capture}`);
+      return;
+    }
+    const worldQuery = new URLSearchParams({ focus: card.id, source });
+    if (source === "library" && batchValue) worldQuery.set("batch", batchValue);
+    router.push(`/world?${worldQuery.toString()}`);
   };
 
   return (
     <PageShell
-      step={2}
-      title={source === "card" ? "这是你记住的声音吗？" : "这段基础声要怎样出现？"}
+      step={3}
+      title={source === "card" ? "让纸卡里的声音第一次被听见" : "这段基础声要怎样出现？"}
       subtitle={source === "card"
-        ? "固定区域由程序读取；声音来源和所有结果都由老师或孩子最终确认。"
-        : "基础素材保持不变，你只是在决定它的音区、时值、变化、力度与出现方式。"}
+        ? "核对识图结果、确认真实音源并写好声音配方；可以随时对比塑形版和未处理原声。"
+        : `选择高低、长短、声音变化、强弱与出现方式，并直接试听塑形前后的区别。${source === "library" && librarySelection.length > 1 ? ` 当前是所选声音 ${selectionProgress.index + 1}/${selectionProgress.total}。` : ""}`}
     >
       <div className="read-card-grid">
         <aside className="scan-panel">
@@ -77,7 +96,7 @@ export function CardConfirmPage() {
             <p>声音日记 · {card.owner}</p>
             <SoundIdentityGlyph userAdded={userAddedSource}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} size="large" /></SoundIdentityGlyph>
             <h2>我听见了「{card.source.label}」</h2>
-            <span>{card.childNote}</span>
+            <span>「{card.childNote}」</span>
             <footer><b>{card.place}</b><b>{card.recordedAt}</b></footer>
           </div>
           <div className="scan-source"><span>{source === "record" ? "录音链路示例素材" : source === "library" ? "环境专属声音库" : "纸质声卡识别"}</span><p>记录与素材来源会随声音进入作品，可随时回溯。</p></div>
@@ -85,7 +104,6 @@ export function CardConfirmPage() {
 
         <section className="reading-panel">
           <header className="reading-panel__head">
-            <SoundIdentityGlyph userAdded={userAddedSource}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} size="small" /></SoundIdentityGlyph>
             <div><span>{source === "card" ? "TEMPLATE READ / 待确认" : "SOURCE SELECTED / 待塑形"}</span><h2>{source === "card" ? "声卡写的是" : "当前基础声"}：{card.source.label}</h2></div>
           </header>
 
@@ -105,7 +123,7 @@ export function CardConfirmPage() {
                 <optgroup label="系统自带声音">{systemSources.map((asset) => <option value={`asset:${asset.id}`} key={asset.id}>{asset.label}</option>)}</optgroup>
                 {recordings.length > 0 && <optgroup label="我的录音">{recordings.map((recording) => <option value={`recording:${recording.id}`} key={recording.id}>{recording.name} · {recording.contributorName}</option>)}</optgroup>}
               </select>
-              <button type="button" disabled={card.sourceSelectionRequired} onClick={() => void playCard(card.id, { fullOriginal: true, allowDraft: true })}>{sourcePlaying ? "❚❚ 暂停" : "▶ 试听"}</button>
+              <button type="button" disabled={card.sourceSelectionRequired} onClick={() => { setUseCardParameters(false); void playCard(card.id, { fullOriginal: true, allowDraft: true }); }}>{sourcePlaying ? "❚❚ 暂停" : "▶ 试听原声"}</button>
               <button type="button" className="source-correction__record" onClick={recordMissingSource}>库里没有？录一段补进去</button>
               {card.sourceSelectionRequired && <p>先确认真实音源，才能让声音诞生。</p>}
             </div>
@@ -116,12 +134,23 @@ export function CardConfirmPage() {
           <ReadingChoice label="声音变化" english="CONTOUR" value={card.contour} options={FIELD_OPTIONS.contour} onChange={(value) => setField("contour", value)} />
           <ReadingChoice label="强弱" english="DYNAMICS" value={card.intensity} options={FIELD_OPTIONS.intensity} onChange={(value) => setField("intensity", value)} />
           <ReadingChoice label="出现方式" english="PATTERN" value={card.pattern} options={FIELD_OPTIONS.pattern} onChange={(value) => setField("pattern", value)} last />
+          <section className="reading-preview" aria-label="试听声音塑形前后的区别">
+            <div className="reading-preview__controls">
+              <div className="birth-mode-toggle" role="group" aria-label="选择是否加入声音配方">
+                <button className={useCardParameters ? "is-selected" : ""} aria-pressed={useCardParameters} onClick={() => choosePreviewMode(true)}><strong>加入配方</strong><small>声卡塑形版</small></button>
+                <button className={!useCardParameters ? "is-selected" : ""} aria-pressed={!useCardParameters} onClick={() => choosePreviewMode(false)}><strong>不加配方</strong><small>未处理原声</small></button>
+              </div>
+              <button className="birth-play" disabled={preparing || card.sourceSelectionRequired} onClick={() => void playCard(card.id, { fullOriginal: !useCardParameters, allowDraft: true })}>{preparing ? "正在准备…" : sourcePlaying ? "❚❚ 暂停" : useCardParameters ? "▶ 播放塑形版" : "▶ 播放未处理原声"}</button>
+            </div>
+            <div className="reading-preview__copy"><span>小耳朵发现</span><p>{childTip}</p></div>
+            {playback.status === "error" && <p className="birth-play-error" role="alert">{playback.errorMessage}</p>}
+          </section>
         </section>
       </div>
 
       <div className="atlas-navfoot">
-        <button onClick={() => router.push(source === "card" ? `/cards?entry=diary&capture=${capture}` : `/cards?entry=record&source=${source}`)}>← <span>重新选择 / BACK</span></button>
-        <button className="atlas-navfoot__next" disabled={Boolean(card.sourceSelectionRequired)} onClick={finish}><span>{card.sourceSelectionRequired ? "请先确认真实音源" : "就是它 · 让声音诞生"}</span> →</button>
+        <button onClick={() => router.push(source === "card" ? `/cards?entry=diary&capture=${capture}` : `/cards?entry=record&source=${source}${batchValue ? `&batch=${encodeURIComponent(batchValue)}` : ""}`)}>← <span>重新选择 / BACK</span></button>
+        <button className="atlas-navfoot__next" disabled={Boolean(card.sourceSelectionRequired)} onClick={finish}><span>{card.sourceSelectionRequired ? "请先确认真实音源" : nextLibraryCardId || nextPaperDraft ? "保存调整 · 继续下一个声音" : "完成调整 · 放进万物声场"}</span> →</button>
       </div>
     </PageShell>
   );

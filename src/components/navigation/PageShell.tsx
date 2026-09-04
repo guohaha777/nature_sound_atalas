@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 const STEPS = [
   { href: "/", zh: "声音入口", en: "ENTRANCE" },
   { href: "/cards?entry=diary", zh: "采集与转译", en: "CAPTURE" },
-  { href: "/sounds/cow/birth", zh: "声音诞生", en: "BIRTH" },
+  { href: "/cards/cow/confirm?entry=record&source=library", zh: "声音诞生", en: "BIRTH" },
   { href: "/world", zh: "万物声场", en: "SOUND FIELD" },
   { href: "/compose", zh: "让万物成曲", en: "COMPOSE" },
 ] as const;

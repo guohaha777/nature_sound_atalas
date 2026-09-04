@@ -4,12 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useExperience } from "@/src/app";
 import { PageShell } from "@/src/components/navigation";
+import { FIELD_LABELS } from "@/src/domain/sound-card";
 import { SoundCreature } from "@/src/components/sound";
 import { readPaperSoundCardV1, type ReadPaperCardEntry } from "@/src/features/read-paper-card/readPaperSoundCard";
-import { clampRecordingDuration, MAX_RECORDING_DURATION_MS } from "@/src/features/recording/recordingPolicy";
+import { assessUploadedAudio, AUDIO_UPLOAD_ACCEPT, clampRecordingDuration, MAX_INGEST_DURATION_SECONDS, MAX_RECORDING_DURATION_MS } from "@/src/features/recording";
+import { readAudioDurationSeconds, trimAudioBlob } from "@/src/audio/editing";
+import { AudioTrimDialog, LiveWaveform } from "@/src/components/audio";
 import { PAGE_TRANSITION_EVENT, startPageTransition, usePageRouter } from "@/src/features/page-transition";
+import { parseLibrarySelection, serializeLibrarySelection } from "@/src/features/library-selection/librarySelection";
 
 type CaptureMode = "record" | "library";
+type UploadCandidate = { fileName: string; blob: Blob; url: string; sourceDurationSeconds: number; selection: { startSeconds: number; endSeconds: number } };
 
 export function CardGalleryPage() {
   const router = usePageRouter();
@@ -25,7 +30,12 @@ export function CardGalleryPage() {
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [recordingDurationMs, setRecordingDurationMs] = useState(0);
+  const [uploadCandidate, setUploadCandidate] = useState<UploadCandidate | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [trimming, setTrimming] = useState(false);
+  const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
   const [activeLibraryItem, setActiveLibraryItem] = useState<string>(currentCard.id);
+  const [selectedLibraryCardIds, setSelectedLibraryCardIds] = useState<string[]>(() => parseLibrarySelection(search.get("batch")));
   const [playingRecordingId, setPlayingRecordingId] = useState<string | null>(null);
   const [openItemMenu, setOpenItemMenu] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<string | null>(null);
@@ -64,6 +74,10 @@ export function CardGalleryPage() {
     if (recordingClockRef.current !== null) window.clearInterval(recordingClockRef.current);
   }, [recordedUrl]);
 
+  useEffect(() => () => {
+    if (uploadCandidate) URL.revokeObjectURL(uploadCandidate.url);
+  }, [uploadCandidate]);
+
   useEffect(() => {
     const stopLocalAudio = () => {
       libraryAudioRef.current?.pause();
@@ -91,6 +105,7 @@ export function CardGalleryPage() {
       const recorder = new MediaRecorder(stream);
       recorderStreamRef.current = stream;
       recorderRef.current = recorder;
+      setLiveStream(stream);
       recorderChunksRef.current = [];
       recorder.ondataavailable = (event) => { if (event.data.size) recorderChunksRef.current.push(event.data); };
       recorder.onstop = () => {
@@ -106,6 +121,7 @@ export function CardGalleryPage() {
         setRecordingDurationMs(clampRecordingDuration(Date.now() - recorderStartedAtRef.current));
         setRecorded(true);
         setRecordingState("ready");
+        setLiveStream(null);
         stream.getTracks().forEach((track) => track.stop());
       };
       recorderStartedAtRef.current = Date.now();
@@ -118,12 +134,77 @@ export function CardGalleryPage() {
       }, MAX_RECORDING_DURATION_MS);
       setRecordingState("recording");
     } catch {
+      setLiveStream(null);
       setRecordingState("error");
     }
   };
 
   const stopRecording = () => {
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+  };
+
+  const acceptCapturedAudio = (blob: Blob, durationMs: number, suggestedName: string) => {
+    recordPreviewRef.current?.pause();
+    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+    setRecordedBlob(blob);
+    setRecordedUrl(URL.createObjectURL(blob));
+    setRecordingDurationMs(clampRecordingDuration(durationMs));
+    setRecorded(true);
+    setRecordingState("ready");
+    if (!captureName.trim()) setCaptureName(suggestedName);
+  };
+
+  const closeUploadCandidate = () => {
+    setUploadCandidate((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  };
+
+  /** 上传音频先读长度：不超过上限直接进入草稿，超过上限必须先截取一段。 */
+  const receiveAudioFile = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadNotice(null);
+    let sourceDurationSeconds = 0;
+    try {
+      sourceDurationSeconds = await readAudioDurationSeconds(file);
+    } catch {
+      setUploadNotice("这个音频文件读不出来。请换成 mp3、wav 或 m4a 再试。");
+      return;
+    }
+    const assessment = assessUploadedAudio(sourceDurationSeconds);
+    if (assessment.tooShort) {
+      setUploadNotice(assessment.message);
+      return;
+    }
+    if (!assessment.requiresTrim) {
+      acceptCapturedAudio(file, assessment.sourceDurationSeconds * 1000, fileBaseName(file.name));
+      setUploadNotice(assessment.message);
+      return;
+    }
+    closeUploadCandidate();
+    setUploadCandidate({
+      fileName: file.name,
+      blob: file,
+      url: URL.createObjectURL(file),
+      sourceDurationSeconds: assessment.sourceDurationSeconds,
+      selection: assessment.suggestedSelection,
+    });
+  };
+
+  const confirmUploadTrim = async (selection: { startSeconds: number; endSeconds: number }) => {
+    if (!uploadCandidate) return;
+    setTrimming(true);
+    try {
+      const trimmed = await trimAudioBlob(uploadCandidate.blob, selection);
+      acceptCapturedAudio(trimmed.blob, trimmed.durationMs, fileBaseName(uploadCandidate.fileName));
+      setUploadNotice(`已保留 ${(trimmed.durationMs / 1000).toFixed(1)} 秒，可以补齐信息后保存。`);
+      closeUploadCandidate();
+    } catch {
+      setUploadNotice("截取没有成功。请换一个音频文件再试。");
+    } finally {
+      setTrimming(false);
+    }
   };
 
   const saveCurrentRecording = async () => {
@@ -173,6 +254,13 @@ export function CardGalleryPage() {
     setActiveLibraryItem(id);
     selectCard(id);
     void playCard(id, { fullOriginal: true });
+  };
+
+  const toggleLibraryCard = (cardId: string, recordingId?: string) => {
+    if (recordingId) selectRecording(recordingId);
+    setSelectedLibraryCardIds((current) => current.includes(cardId)
+      ? current.filter((id) => id !== cardId)
+      : [...current, cardId]);
   };
 
   const beginRename = (id: string, name: string) => {
@@ -246,10 +334,14 @@ export function CardGalleryPage() {
       if (draftIds[0]) router.push(`/cards/${draftIds[0]}/confirm?entry=diary&source=card&capture=${diaryCapture}`);
       return;
     }
-    const selectedSystemCard = systemCards.find((card) => card.id === activeLibraryItem);
-    const selectedRecording = recordings.find((recording) => recording.id === activeLibraryItem);
-    const selectedCardId = selectedSystemCard?.id ?? (selectedRecording ? `card-${selectedRecording.id}` : currentCard.id);
-    router.push(`/cards/${selectedCardId}/confirm?entry=${entry}&source=${captureMode}`);
+    const selectedCardId = selectedLibraryCardIds[0];
+    if (!selectedCardId) return;
+    const query = new URLSearchParams({
+      entry,
+      source: captureMode,
+      batch: serializeLibrarySelection(selectedLibraryCardIds),
+    });
+    router.push(`/cards/${selectedCardId}/confirm?${query.toString()}`);
   };
 
   return (
@@ -260,7 +352,7 @@ export function CardGalleryPage() {
         ? "拍下声音日记。应用先读懂来源，再按固定区域读取高低、长短、变化、强弱与出现方式。"
         : captureMode === "record"
           ? "直接录下声音，试听后补齐名称、孩子、日期和地点，再保存进声音库。"
-          : "这里有你之前保存的录音和系统自带声音。点一下就能试听，选好后继续。"}
+          : "这里有你之前保存的录音和系统自带声音。试听与勾选分开，可以一次选择多个声音，再逐个完成转译。"}
     >
       <div className="capture-origin" aria-label="首页已选择的采集方式">
         <span>ACT I · 入口选择完成</span>
@@ -282,15 +374,17 @@ export function CardGalleryPage() {
           </section>
         ) : captureMode === "record" ? (
           <section className="capture-stage capture-stage--record">
-            <div className="capture-stage__top"><span>RECORDER / 环境采集</span><b>{recordingState === "recording" ? `正在录音 ${Math.ceil(recordingDurationMs / 1000)} / ${MAX_RECORDING_DURATION_MS / 1000} 秒` : recorded ? `${Math.max(1, Math.round(recordingDurationMs / 1000))} 秒` : `最长 ${MAX_RECORDING_DURATION_MS / 1000} 秒`}</b></div>
-            <div className={`mock-wave ${recordingState === "recording" || recorded ? "is-recorded" : ""}`} aria-label="录音波形示意">
-              {Array.from({ length: 42 }, (_, index) => <i style={{ height: `${18 + ((index * 17) % 54)}%` }} key={index} />)}
-            </div>
+            <div className="capture-stage__top"><span>RECORDER / 环境采集</span><b className={recordingState === "recording" ? "is-recording" : ""}>{recordingState === "recording" ? `正在录音 ${Math.ceil(recordingDurationMs / 1000)} / ${MAX_RECORDING_DURATION_MS / 1000} 秒` : recorded ? `${Math.max(1, Math.round(recordingDurationMs / 1000))} 秒` : `最长 ${MAX_RECORDING_DURATION_MS / 1000} 秒`}</b></div>
+            <LiveWaveform stream={recordingState === "recording" ? liveStream : null} />
             {/* 环境声音没有语言字幕轨；控件保留可见的中文名称。 */}
             {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
             {recordedUrl && <audio ref={recordPreviewRef} className="record-preview" src={recordedUrl} controls aria-label="试听刚录下的声音" />}
             <button className="record-button" onClick={recordingState === "recording" ? stopRecording : startRecording}><span>{recordingState === "recording" ? "■" : recorded ? "↺" : "●"}</span>{recordingState === "recording" ? "停止录音" : recorded ? "重新录一段" : "开始录音"}</button>
             <p className="capture-stage__hint">{recordingState === "error" ? "麦克风没有打开。请检查权限，再试一次。" : `单段录音最长 ${MAX_RECORDING_DURATION_MS / 1000} 秒，到时自动停止；保存后始终完整播放。`}</p>
+            <div className="capture-upload">
+              <label className="capture-upload__button">上传音频文件<input type="file" accept={AUDIO_UPLOAD_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; void receiveAudioFile(file); }} /></label>
+              <p role="status">{uploadNotice ?? `也可以从这台设备选择已有音频。单个音源最长 ${MAX_INGEST_DURATION_SECONDS} 秒，超过时会先请你截取一段再保存。`}</p>
+            </div>
           </section>
         ) : null}
 
@@ -304,14 +398,15 @@ export function CardGalleryPage() {
         </section>}
 
         {(entry === "diary" || captureMode === "library") && <section className="capture-library">
-          <div className="capture-library__head"><div><span>{entry === "diary" ? "READ ENTRIES" : "SOUND LIBRARY"}</span><h2>{entry === "diary" ? "已填写的声音" : "我的录音与系统声音"}</h2></div><b>{entry === "diary" ? readEntries ? `${filledEntries.length} FILLED` : "READING" : `${recordings.length + systemCards.length} ITEMS`}</b></div>
+          <div className="capture-library__head"><div><span>{entry === "diary" ? "READ ENTRIES" : "SOUND LIBRARY"}</span><h2>{entry === "diary" ? "已填写的声音" : "我的录音与系统声音"}</h2></div><b>{entry === "diary" ? readEntries ? `${filledEntries.length} FILLED` : "READING" : `已选 ${selectedLibraryCardIds.length} / ${recordings.length + systemCards.length}`}</b></div>
           {entry === "record" ? <div className="capture-library__groups">
             <details className="capture-library-group" open>
               <summary><span><strong>历史声音</strong><small>你保存到这台设备的声音</small></span><em>{recordings.length}</em></summary>
               <div className="capture-library__list">
               {recordings.length === 0 && <div className="capture-library__empty capture-library__empty--compact"><b>还没有历史声音</b><span>录制并保存后会出现在这里。</span></div>}
               {recordings.map((recording, index) => (
-              <div className={`capture-library__item ${activeLibraryItem === recording.id ? "is-selected" : ""}`} key={recording.id}>
+              <div className={`capture-library__item ${selectedLibraryCardIds.includes(`card-${recording.id}`) ? "is-selected" : ""}`} key={recording.id}>
+                <button type="button" className="capture-library__select" aria-pressed={selectedLibraryCardIds.includes(`card-${recording.id}`)} aria-label={`${selectedLibraryCardIds.includes(`card-${recording.id}`) ? "取消选择" : "选择"}${recording.name}`} onClick={() => toggleLibraryCard(`card-${recording.id}`, recording.id)}>{selectedLibraryCardIds.includes(`card-${recording.id}`) ? "✓" : ""}</button>
                 <button className="capture-library__play" onClick={() => { selectRecording(recording.id); void playStoredRecording(recording.id); }} aria-label={`${playingRecordingId === recording.id ? "暂停" : "播放"}${recording.name}`}><span className="capture-library__index">{playingRecordingId === recording.id ? "❚❚" : String(index + 1).padStart(2, "0")}</span><span className="capture-entry-emoji" aria-hidden="true">🌟</span></button>
                 <span className="capture-library__info">{editingItem === recording.id ? <input ref={editInputRef} value={editingName} onChange={(event) => setEditingName(event.target.value)} onBlur={() => void finishRename()} onKeyDown={(event) => { if (event.key === "Enter") void finishRename(); if (event.key === "Escape") setEditingItem(null); }} aria-label="编辑声音名字" /> : <button onClick={() => { selectRecording(recording.id); void playStoredRecording(recording.id); }}><strong>{recording.name}</strong><small>{recording.contributorName} · {recording.place}</small></button>}</span><em>我的录音</em>
                 <button className="capture-library__more" onClick={() => { setOpenItemMenu(openItemMenu === recording.id ? null : recording.id); setConfirmDeleteItem(null); }} aria-label={`编辑${recording.name}`}>•••</button>
@@ -324,7 +419,8 @@ export function CardGalleryPage() {
               <summary><span><strong>系统声音</strong><small>随应用提供，不会被历史操作删除</small></span><em>{systemCards.length}</em></summary>
               <div className="capture-library__list">
               {systemCards.map((card, index) => (
-                <div className={`capture-library__item capture-library__item--system ${activeLibraryItem === card.id ? "is-selected" : ""}`} key={card.id}>
+                <div className={`capture-library__item capture-library__item--system ${selectedLibraryCardIds.includes(card.id) ? "is-selected" : ""}`} key={card.id}>
+                  <button type="button" className="capture-library__select" aria-pressed={selectedLibraryCardIds.includes(card.id)} aria-label={`${selectedLibraryCardIds.includes(card.id) ? "取消选择" : "选择"}${card.source.label}`} onClick={() => toggleLibraryCard(card.id)}>{selectedLibraryCardIds.includes(card.id) ? "✓" : ""}</button>
                   <button className="capture-library__play" onClick={() => playSystemCard(card.id)} aria-label={`${playback.status === "playing" && playback.activeSoundUnitIds.includes(`unit-${card.id}`) ? "暂停" : "播放"}${card.source.label}`}><span className="capture-library__index">S{String(index + 1).padStart(2, "0")}</span><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} size="small" /></button>
                   <span className="capture-library__info"><button onClick={() => playSystemCard(card.id)}><strong>{card.source.label}</strong><small>{card.owner} · {card.place}</small></button></span><em>系统自带</em>
                 </div>
@@ -348,23 +444,36 @@ export function CardGalleryPage() {
         </section>}
       </div>
 
+      {uploadCandidate && <AudioTrimDialog
+        fileName={uploadCandidate.fileName}
+        playbackUrl={uploadCandidate.url}
+        sourceDurationSeconds={uploadCandidate.sourceDurationSeconds}
+        defaultSelection={uploadCandidate.selection}
+        busy={trimming}
+        onCancel={closeUploadCandidate}
+        onConfirm={(selection) => void confirmUploadTrim(selection)}
+      />}
+
       <div className="atlas-navfoot">
         <button onClick={() => router.push("/")}>← <span>返回入口选择 / BACK</span></button>
-        <button className="atlas-navfoot__next" disabled={captureMode === "record" && entry === "record" ? !recordedBlob || !captureName.trim() || !normalizedContributorName || !capturePlace.trim() || !captureDate : (entry === "diary" && (!acquiredCardImage || filledEntries.length === 0)) || (entry === "diary" && (!filledEntries.every((item) => paperNames[item.entryIndex]?.trim()) || !normalizedContributorName || !capturePlace.trim() || !captureDate))} onClick={captureMode === "record" && entry === "record" ? saveCurrentRecording : next}>
-          <span>{entry === "diary" ? "读取这张声音日记" : captureMode === "record" ? "保存进声音库" : "使用这个声音"}</span> →
+        <button className="atlas-navfoot__next" disabled={captureMode === "record" && entry === "record" ? !recordedBlob || !captureName.trim() || !normalizedContributorName || !capturePlace.trim() || !captureDate : captureMode === "library" && entry === "record" ? selectedLibraryCardIds.length === 0 : (entry === "diary" && (!acquiredCardImage || filledEntries.length === 0)) || (entry === "diary" && (!filledEntries.every((item) => paperNames[item.entryIndex]?.trim()) || !normalizedContributorName || !capturePlace.trim() || !captureDate))} onClick={captureMode === "record" && entry === "record" ? saveCurrentRecording : next}>
+          <span>{entry === "diary" ? "读取这张声音日记" : captureMode === "record" ? "保存进声音库" : selectedLibraryCardIds.length ? `转译所选 ${selectedLibraryCardIds.length} 个声音` : "请先选择声音"}</span> →
         </button>
       </div>
     </PageShell>
   );
 }
 
+function fileBaseName(fileName: string) {
+  return fileName.replace(/\.[^.]+$/, "").slice(0, 24) || "上传的声音";
+}
+
 function fieldSummary(entry: ReadPaperCardEntry) {
-  const labels = {
-    high: "高", mid: "中", low: "低",
-    short: "短", medium: "中", long: "长",
-    rising: "升高", falling: "降低", flat: "平稳", wavy: "起伏",
-    soft: "轻", loud: "响",
-    once: "一次", repeat: "重复", bursts: "一阵一阵", "fade-in": "慢慢出现",
-  } as const;
-  return [entry.pitch, entry.duration, entry.contour, entry.intensity, entry.pattern].map((value) => value ? labels[value] : "待确认").join(" · ");
+  return [
+    entry.pitch && FIELD_LABELS.pitch[entry.pitch],
+    entry.duration && FIELD_LABELS.duration[entry.duration],
+    entry.contour && FIELD_LABELS.contour[entry.contour],
+    entry.intensity && FIELD_LABELS.intensity[entry.intensity],
+    entry.pattern && FIELD_LABELS.pattern[entry.pattern],
+  ].map((label) => label || "待确认").join(" · ");
 }

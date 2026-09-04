@@ -1,3 +1,4 @@
+import type { CompositionDurationSeconds } from "@/src/domain/composition";
 import type { TeachingAgentToolName } from "./types";
 
 export interface TeachingAgentToolInputMap {
@@ -5,7 +6,7 @@ export interface TeachingAgentToolInputMap {
   resolve_audio_source: { projectId: string; cardId: string };
   render_sound_unit: { projectId: string; cardId: string; audioAssetId: string };
   inspect_composition: { projectId: string; soundUnitIds: string[] };
-  arrange_composition: { projectId: string; soundUnitIds: string[]; durationSeconds: 15 | 24 | 30 };
+  arrange_composition: { projectId: string; soundUnitIds: string[]; durationSeconds: CompositionDurationSeconds };
   generate_polish: { projectId: string; compositionId: string; revision: number };
   validate_polish: { projectId: string; compositionId: string; polishLayerId: string };
   archive_composition: { projectId: string; compositionId: string; agentRunId: string };
@@ -21,7 +22,7 @@ export interface TeachingAgentToolOutputMap {
     backgroundRecommendation: "helpful" | "not-needed" | "uncertain";
     safeReason: string;
   };
-  arrange_composition: { compositionId: string; revision: number; arrangerVersion: "arranger-v1" };
+  arrange_composition: { compositionId: string; revision: number; arrangerVersion: "arranger-v1" | "arranger-v2" };
   generate_polish: { polishLayerId: string; sourceKind: "live_ai" | "symbolic_ai" | "cached_demo_ai" | "local_fallback" };
   validate_polish: {
     accepted: boolean;

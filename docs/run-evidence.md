@@ -44,7 +44,7 @@ npm run test:domain
 npm run test
 ```
 
-完整测试覆盖：六字段映射、声音时长、编排、播放时间线、原声追溯、录音上限、Agent决策与执行记录、作品理解输出、音乐Plan B、持久化、标准Next.js构建、Sites/Cloudflare构建及渲染HTML检查。
+完整测试覆盖：声音配方映射、声音时长、编排、播放时间线、原声追溯、录音上限、Agent决策与执行记录、作品理解输出、音乐Plan B、持久化、标准Next.js构建、Sites/Cloudflare构建及渲染HTML检查。
 
 2026-08-14 本机实际结果：
 

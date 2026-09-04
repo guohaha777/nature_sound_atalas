@@ -56,6 +56,17 @@ export function WorkDetailPage({ workId }: { workId: string }) {
         <button className="work-card-dialog__close" onClick={() => setSelectedWorkId(null)} aria-label="关闭作品详情">×</button>
         <div className="work-card-dialog__visual work-card-dialog__visual--plain" style={{ "--poster-color": selectedCoverCard?.color ?? "#d8a46f", "--poster-accent": selectedCoverCard?.accent ?? "#7b5841" } as React.CSSProperties}><span>ARCHIVED COMPOSITION</span><strong>{selectedModel.title}</strong></div>
         <div className="work-card-dialog__body"><p className="section-kicker">作品档案 / COMPOSITION</p><h2 id="work-card-dialog-title">{selectedModel.title}</h2><p>{selectedModel.composition.durationSeconds} 秒作品 · 保存于 {formatSavedAt(selectedModel.composition.savedAt)}</p>
+          <section className="work-background-source">
+            <span>BACKGROUND / 这首作品的背景</span>
+            <h3>{selectedModel.background.label}{selectedModel.background.enabled ? "" : "（保存时已关闭）"}</h3>
+            {selectedModel.background.note && <p>{selectedModel.background.note}</p>}
+            {selectedModel.background.expiredNote && <p className="work-background-source__expired" role="note">{selectedModel.background.expiredNote}</p>}
+            {selectedModel.background.toneNote && <p><strong>当时的音色：</strong>{selectedModel.background.toneNote}</p>}
+            {selectedModel.background.repairs.length > 0 && <p><strong>保存前程序做过的修补：</strong>{selectedModel.background.repairs.join("、")}。</p>}
+            {selectedModel.agentDecision && <p><strong>编排决定：</strong>{selectedModel.agentDecision.label}——{selectedModel.agentDecision.reason}</p>}
+            <small>显示的是保存那一刻的记录，不会重新调用模型。</small>
+          </section>
+
           {selectedModel.musicDiscovery && <section className="work-music-discovery"><span>MUSIC DISCOVERY / 音乐小发现</span><h3>{selectedModel.musicDiscovery.childText}</h3><p><strong>可以再试试：</strong>{selectedModel.musicDiscovery.tryThis}</p><small>{selectedModel.musicDiscovery.sourceLabel} · 使用保存作品时的匿名结构数据，不重新调用模型。</small></section>}
           <div className="work-composition-sources"><strong>组成声音 · {selectedModel.units.length}</strong>{selectedModel.units.map((unit, index) => {
             const card = cards.find((item) => item.id === unit.cardId);

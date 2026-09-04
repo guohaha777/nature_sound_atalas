@@ -1,4 +1,4 @@
-import type { MusicPolishBrief } from "../contracts";
+import type { MusicPolishBrief } from "@/src/features/music-polish/contracts";
 
 const EMOTION_COPY = {
   bright: "明亮、开心、有活力，但不过度热闹",
