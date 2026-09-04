@@ -4,11 +4,9 @@ import { isBackgroundGainLimited, maxOverlappingEvents } from "@/src/audio/mixin
 import type { PlaybackPlan } from "@/src/audio/ports/CompositionPlayer";
 import type { AIPolishLayer, Composition } from "@/src/domain/composition";
 import type { ConfirmedSoundCard, SoundUnit } from "@/src/domain/sound-card";
-import {
-  buildDeterministicSymbolicPlan, buildMusicPolishBrief,
-  deriveBackgroundVoicing, deriveMusicPolishDirection,
-} from "@/src/features/music-polish";
+import { buildMusicPolishBrief, deriveBackgroundVoicing, deriveMusicPolishDirection } from "@/src/features/music-polish";
 import type { PolishGenerationPort } from "@/src/features/ports";
+import { requestSymbolicPlanLayer } from "@/src/services/symbolic-plan";
 import { buildLegoCaptions } from "./buildLegoCaptions";
 
 /**
@@ -77,36 +75,12 @@ export class AceStepPolishGenerator implements PolishGenerationPort {
     };
   }
 
-  /** 模型不可用时的最后一层：纯本地推导，不联网、不依赖模型服务。 */
-  fallback(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[]): AIPolishLayer {
-    const brief = buildMusicPolishBrief(composition, cards, units);
-    const direction = deriveMusicPolishDirection(brief);
-    const defaultGainDb = direction.energyBand === "driving" ? -13 : direction.energyBand === "balanced" ? -15 : -17;
-    return {
-      id: `local-score-${composition.revision}`,
-      compositionRevision: composition.revision,
-      sourceKind: "local_fallback",
-      provider: "wanwu-deterministic-score",
-      model: null,
-      promptVersion: "symbolic-music-plan-v1",
-      fallbackReason: "not-connected",
-      defaultGainDb,
-      basedOnInputHash: `fallback:${stableHash(JSON.stringify(brief))}`,
-      direction,
-      voicing: deriveBackgroundVoicing(brief),
-      symbolicPlan: buildDeterministicSymbolicPlan(brief),
-      validation: {
-        version: "background-validation-v1",
-        status: "local-verified",
-        format: "local-synthesis",
-        trustedSource: true,
-        instrumentalModeRequested: true,
-        generatedDurationSeconds: null,
-        playbackDurationSeconds: composition.durationSeconds,
-        gainLimited: isBackgroundGainLimited(defaultGainDb, maxOverlappingEvents(composition)),
-        voiceRiskCheck: "not-applicable",
-      },
-    };
+  /**
+   * ACE-Step 不可用时走 Plan B：语言模型给动机，代码把它发展成音符伴奏。
+   * 这一层刻意不自己实现——音频模型可以换，Plan B 始终是同一条链路。
+   */
+  fallback(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[]): Promise<AIPolishLayer> {
+    return requestSymbolicPlanLayer(composition, cards, units);
   }
 }
 

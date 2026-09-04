@@ -140,9 +140,14 @@ export function ComposePage() {
               if (!card || !unit) return null;
               const playing = playback.activeCompositionEventIds.includes(event.id);
               const pitch = pitchBandFromSemitoneShift(event.semitoneShift);
-              const capsuleWidth = event.durationBeats <= 0.5 ? INTENSITY_SIZE[unit.parameters.intensity] : `max(${INTENSITY_SIZE[unit.parameters.intensity]}px, ${(event.durationBeats / maxBeat) * 88}%)`;
+              // 谱面左右各留 6% 边距：left 从 6% 起算，最远只能画到 94%。
+              const startPercent = 6 + (event.startBeat / maxBeat) * 88;
+              const remainingPercent = Math.max(0, 94 - startPercent);
+              const capsuleWidth = event.durationBeats <= 0.5
+                ? INTENSITY_SIZE[unit.parameters.intensity]
+                : `min(max(${INTENSITY_SIZE[unit.parameters.intensity]}px, ${(event.durationBeats / maxBeat) * 88}%), ${remainingPercent}%)`;
               const displayName = card.displayName ?? card.source.label;
-              return <div className={`score-note score-note--capsule ${playing ? "is-playing" : ""}`} style={{ left: `${6 + (event.startBeat / maxBeat) * 88}%`, top: `${PITCH_Y[pitch]}%`, width: capsuleWidth, height: INTENSITY_SIZE[unit.parameters.intensity], background: card.color } as React.CSSProperties} title={`${card.owner} · ${displayName} · ${emotionSelection?.keyword ?? "未选择情绪"}`} key={event.id}><SoundIdentityGlyph userAdded={isUserAddedSound(unit, asset)}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={playing} size="small" /></SoundIdentityGlyph></div>;
+              return <div className={`score-note score-note--capsule ${playing ? "is-playing" : ""}`} style={{ left: `${startPercent}%`, top: `${PITCH_Y[pitch]}%`, width: capsuleWidth, height: INTENSITY_SIZE[unit.parameters.intensity], background: card.color } as React.CSSProperties} title={`${card.owner} · ${displayName} · ${emotionSelection?.keyword ?? "未选择情绪"}`} key={event.id}><SoundIdentityGlyph userAdded={isUserAddedSound(unit, asset)}><SoundCreature kind={card.creatureKind} color={card.color} accent={card.accent} active={playing} size="small" /></SoundIdentityGlyph></div>;
             })}
             <div className="score-playhead" style={{ left: `${playheadLeft}%` }} />
             <span className="sound-score__time">完整作品 {Math.ceil(timeline.audibleDurationSeconds)} 秒</span>
@@ -203,7 +208,7 @@ export function ComposePage() {
         <details className="ai-layer__audit">
           <summary>老师 / 评审：这次的声音是怎么处理的</summary>
           <div>
-            <p><strong>这次的来源</strong>——背景：{polishSourceLabel}{polishSourceNote ? `（${polishSourceNote}）` : ""}。作品解说：{advisorSource}。</p>
+            <p><strong>这次的来源</strong>——背景：{polishSourceLabel}{polishSourceNote ? `（${polishSourceNote.replace(/。$/, "")}）` : ""}。作品解说：{advisorSource}。</p>
             {arrangementSummary ? <p><strong>这次给每个声音派了角色：</strong>{arrangementSummary}。<em>一首曲子就像一个班，有人领唱，有人回应，有人在后面轻轻垫着——少了谁都不一样。</em></p> : null}
             <p><strong>背景是单独的一层，</strong>压在孩子的声音下面，音量有上限，随时可以关掉。<em>背景只是伴奏，主角一直是你录回来的那个声音。</em></p>
             {discovery ? <p><strong>这首作品里的发现</strong><em>{discovery.childText} 试一试：{discovery.tryThis}</em></p> : null}

@@ -81,16 +81,37 @@ describe("AceStepPolishGenerator", () => {
       .rejects.toThrow("本地音乐模型没有启动");
   });
 
-  it("falls back to a local symbolic plan without touching the model or the network", async () => {
-    const fetchMock = vi.fn();
+  it("runs the language-model Plan B when ACE-Step is unavailable", async () => {
+    // Plan B 的价值就在于它还会联网问语言模型；之前这里断言的是「不发请求」，
+    // 正好把「音频模型一挂就掉到机械伴奏」这个 bug 锁住了。
+    const modelPlan = {
+      version: "symbolic-music-plan-v1",
+      bpm: plan.composition.bpm,
+      durationSeconds: plan.composition.durationSeconds,
+      events: [
+        { startSeconds: 0, durationSeconds: 4, midiNotes: [60, 64, 67], voice: "pad", velocity: 0.3 },
+        { startSeconds: 4, durationSeconds: 4, midiNotes: [62, 65, 69], voice: "pad", velocity: 0.3 },
+      ],
+    };
+    const fetchMock = vi.fn(async () => Response.json({ plan: modelPlan, provider: "dashscope.aliyuncs.com", model: "qwen-test", repairs: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const layer = new AceStepPolishGenerator(() => plan).fallback(plan.composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS);
+    const layer = await new AceStepPolishGenerator(() => plan).fallback(plan.composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith("/api/music/plan", expect.objectContaining({ method: "POST" }));
     expect(renderChildrenMix).not.toHaveBeenCalled();
-    expect(layer.sourceKind).toBe("local_fallback");
     expect(layer.symbolicPlan).toBeDefined();
     expect(layer.audioUrl).toBeUndefined();
+  });
+
+  it("only drops to the deterministic score when Plan B itself fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ message: "智能音符编排 API 尚未配置。" }, { status: 503 })));
+
+    const layer = await new AceStepPolishGenerator(() => plan).fallback(plan.composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS);
+
+    expect(layer.sourceKind).toBe("local_fallback");
+    expect(layer.fallbackReason).toBe("not-configured");
+    expect(layer.provider).toBe("wanwu-deterministic-score");
+    expect(layer.symbolicPlan).toBeDefined();
   });
 });
