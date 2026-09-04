@@ -23,17 +23,26 @@ export class AceStepPolishGenerator implements PolishGenerationPort {
   /** 需要拿到音频资产才能渲染编排，所以比其它实现多依赖一个播放计划。 */
   constructor(private readonly resolvePlan: (composition: Composition) => PlaybackPlan) {}
 
-  async generate(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[]): Promise<AIPolishLayer> {
+  async generate(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[], attempt = 0): Promise<AIPolishLayer> {
     const brief = buildMusicPolishBrief(composition, cards, units);
     const direction = deriveMusicPolishDirection(brief);
-    const mix = await renderChildrenMix(this.resolvePlan(composition));
+    // 离线渲染在页面被切到后台时会被浏览器挂起，永远不 resolve——进度条会一直转，
+    // 只能刷新页面才能恢复。加一道超时把死等变成一次普通失败，
+    // 后面的失败对话框和降级链路照常，孩子回到这一页重试即可。
+    const mix = await withTimeout(
+      renderChildrenMix(this.resolvePlan(composition)),
+      RENDER_TIMEOUT_MS,
+      "编排渲染超时，可能是页面切到了后台。回到这一页重试，或直接使用 Plan B。",
+    );
     const captions = buildLegoCaptions(brief, direction);
 
     const form = new FormData();
     form.append("audio", new File([mix.blob], "arrangement.wav", { type: mix.mimeType }));
     form.append("prompt", captions.local);
     form.append("globalCaption", captions.global);
-    form.append("seed", String(hashSeed(composition.seed)));
+    // composition.seed 是常量，只用它会让每次"重新生成"拿回一模一样的音频。
+    const seed = hashSeed(`${composition.seed}:${attempt}`);
+    form.append("seed", String(seed));
 
     const response = await fetch("/api/music/lego", { method: "POST", body: form });
     if (!response.ok) {
@@ -49,7 +58,7 @@ export class AceStepPolishGenerator implements PolishGenerationPort {
 
     const defaultGainDb = -15;
     return {
-      id: `ace-step-${composition.revision}-${hashSeed(composition.seed)}`,
+      id: `ace-step-${composition.revision}-${seed}`,
       compositionRevision: composition.revision,
       sourceKind: "live_ai",
       provider: response.headers.get("X-Polish-Provider") ?? "ace-step-local",
@@ -60,7 +69,7 @@ export class AceStepPolishGenerator implements PolishGenerationPort {
       direction,
       voicing: deriveBackgroundVoicing(brief),
       audioUrl: URL.createObjectURL(fitted.blob),
-      audioAssetId: `ace-step-${composition.revision}`,
+      audioAssetId: `ace-step-${composition.revision}-${seed}`,
       validation: {
         version: "background-validation-v1",
         status: "basic-guarded",
@@ -79,9 +88,20 @@ export class AceStepPolishGenerator implements PolishGenerationPort {
    * ACE-Step 不可用时走 Plan B：语言模型给动机，代码把它发展成音符伴奏。
    * 这一层刻意不自己实现——音频模型可以换，Plan B 始终是同一条链路。
    */
-  fallback(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[]): Promise<AIPolishLayer> {
-    return requestSymbolicPlanLayer(composition, cards, units);
+  fallback(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[], attempt = 0): Promise<AIPolishLayer> {
+    return requestSymbolicPlanLayer(composition, cards, units, attempt);
   }
+}
+
+/** 一段 20—45 秒的编排通常一两秒就渲染完；给到 30 秒纯粹是为了兜住异常。 */
+const RENDER_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([work, guard]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 function stableHash(value: string) {

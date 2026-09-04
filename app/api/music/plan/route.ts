@@ -12,7 +12,10 @@ import { buildMusicIdeaPrompt, JSON_ONLY_SYSTEM_MESSAGE } from "@/src/prompts";
 import { symbolicMusicPlanSchema } from "@/src/domain/composition";
 
 export async function POST(request: Request) {
-  const parsed = musicPolishBriefSchema.safeParse((await request.json().catch(() => null) as { brief?: unknown } | null)?.brief);
+  const body = await request.json().catch(() => null) as { brief?: unknown; attempt?: unknown } | null;
+  const parsed = musicPolishBriefSchema.safeParse(body?.brief);
+  // 重试要真的换一版：提示词里要求换动机，采样温度也放开一些。
+  const attempt = typeof body?.attempt === "number" && Number.isFinite(body.attempt) ? Math.max(0, Math.min(9, Math.trunc(body.attempt))) : 0;
   if (!parsed.success) return Response.json({ message: "音符编排摘要无效。" }, { status: 400 });
 
   const apiKey = process.env.COMPOSITION_ADVISOR_API_KEY?.trim();
@@ -36,11 +39,11 @@ export async function POST(request: Request) {
         model,
         messages: [
           { role: "system", content: JSON_ONLY_SYSTEM_MESSAGE },
-          { role: "user", content: buildMusicIdeaPrompt(parsed.data) },
+          { role: "user", content: buildMusicIdeaPrompt(parsed.data, attempt) },
         ],
         response_format: { type: "json_object" },
         enable_thinking: false,
-        temperature: 0.35,
+        temperature: attempt > 0 ? 0.7 : 0.35,
       }),
       signal: AbortSignal.timeout(150_000),
     });
@@ -116,8 +119,20 @@ function normalizeIdea(decoded: unknown): unknown {
       return { ...item, name: SECTION_ORDER[index] ?? item.name };
     })
     : source.sections;
-  return { ...source, version: "music-idea-v1", sections };
+  // 动机写长了就截断，别整版丢弃。提高采样温度换新写法时，模型偶尔会多写一两个音，
+  // 为这个把整条 Plan B 判死、掉回机械伴奏，代价远大于少听两个音。
+  // 两个数组要一起截，developMusicIdea 依赖它们一一对应。
+  const motifLength = Math.min(
+    MAX_MOTIF_NOTES,
+    Array.isArray(source.motifDegrees) ? source.motifDegrees.length : MAX_MOTIF_NOTES,
+    Array.isArray(source.motifBeats) ? source.motifBeats.length : MAX_MOTIF_NOTES,
+  );
+  const motifDegrees = Array.isArray(source.motifDegrees) ? source.motifDegrees.slice(0, motifLength) : source.motifDegrees;
+  const motifBeats = Array.isArray(source.motifBeats) ? source.motifBeats.slice(0, motifLength) : source.motifBeats;
+  return { ...source, version: "music-idea-v1", sections, motifDegrees, motifBeats };
 }
+
+const MAX_MOTIF_NOTES = 6;
 
 const SECTION_ORDER = ["intro", "development", "peak", "ending"] as const;
 

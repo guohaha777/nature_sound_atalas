@@ -12,7 +12,12 @@ export const MUSIC_IDEA_PROMPT_VERSION = "music-idea-prompt-v1";
  *
  * 附带的好处：要返回的 JSON 很短，格式出错和被截断的概率大幅下降。
  */
-export function buildMusicIdeaPrompt(brief: MusicPolishBrief): string {
+/**
+ * attempt 是"这是第几次尝试"。孩子点"重新生成"就是想听到不一样的东西，
+ * 而这份摘要每次都相同，靠 0.35 的 temperature 换不出新动机——所以直接把
+ * "换一个写法"写进提示词。第一次不加，保证首版是模型最有把握的那一版。
+ */
+export function buildMusicIdeaPrompt(brief: MusicPolishBrief, attempt = 0): string {
   const material = derivePitchMaterial(brief);
   const valence = brief.emotionCoordinates.enabled ? brief.emotionCoordinates.valence : 0;
   const arousal = brief.emotionCoordinates.enabled ? brief.emotionCoordinates.arousal : 0;
@@ -57,7 +62,10 @@ export function buildMusicIdeaPrompt(brief: MusicPolishBrief): string {
 
     "【本次作品的匿名摘要】",
     JSON.stringify(brief),
-  ].join("\n");
+    attempt > 0
+      ? `这是第 ${attempt + 1} 次为这首作品写伴奏。请换一个明显不同的动机：换一个起音、换一种节奏疏密，或者换一件主奏乐器。不要重复前几次的写法。`
+      : "",
+  ].filter(Boolean).join("\n");
 }
 
 function sectionLabel(name: MusicPolishBrief["sections"][number]["name"]) {

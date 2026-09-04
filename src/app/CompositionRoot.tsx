@@ -96,7 +96,7 @@ interface ExperienceContextValue {
   seekPlayback(seconds: number): Promise<void>;
   pausePlayback(): void;
   togglePolish(enabled: boolean): void;
-  generatePolish(useFallback?: boolean): Promise<boolean>;
+  generatePolish(useFallback?: boolean, options?: { autoChain?: boolean }): Promise<boolean>;
   requestCompositionAdvice(): Promise<void>;
   dismissPolishFailure(): void;
   cyclePattern(cardId: string): void;
@@ -120,6 +120,10 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   const [player] = useState(() => new LazyToneCompositionPlayer());
   const [compositionAdvisor] = useState<CompositionAdvicePort>(() => new HybridCompositionAdvisor());
   const loadedPlanRef = useRef<string | null>(null);
+  /** 第几次为当前作品配背景。只喂给背景生成，不参与编曲，编曲的可复现性不受影响。 */
+  const polishAttemptRef = useRef(0);
+  /** 换时长要触发重配，但那个回调定义在后面；用 ref 取最新实现，避免调整声明顺序。 */
+  const generatePolishRef = useRef<((useFallback?: boolean, options?: { autoChain?: boolean }) => Promise<boolean>) | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const [snapshot, setSnapshot] = useState<DemoSnapshot>(createInitialDemoSnapshot);
@@ -748,7 +752,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     player.setPolishEnabled(enabled);
   }, [player]);
 
-  const generatePolish = useCallback(async (useFallback = false) => {
+  const generatePolish = useCallback(async (useFallback = false, options?: { autoChain?: boolean }) => {
     const current = snapshotRef.current;
     const composition = current.composition ?? attachCompositionContext(
       arrangeCompositionV2(current.cards, current.units, 1),
@@ -757,15 +761,29 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     );
     setPolishStatus("requesting");
     setPolishErrorMessage(null);
+    const attempt = polishAttemptRef.current;
+    polishAttemptRef.current += 1;
     let layer: AIPolishLayer;
     try {
       layer = useFallback
-        ? await polish.fallback(composition, current.cards, current.units)
-        : await polish.generate(composition, current.cards, current.units);
+        ? await polish.fallback(composition, current.cards, current.units, attempt)
+        : await polish.generate(composition, current.cards, current.units, attempt);
     } catch (error) {
-      setPolishStatus("failed");
-      setPolishErrorMessage(error instanceof Error ? error.message : "AI 背景生成失败，请稍后重试。");
-      return false;
+      // 换时长这类自动触发的场景不该弹对话框打断孩子：音乐模型不行就走千问，
+      // 千问不行 requestSymbolicPlanLayer 内部还会退到系统伴奏，一定有结果。
+      if (options?.autoChain && !useFallback) {
+        try {
+          layer = await polish.fallback(composition, current.cards, current.units, attempt);
+        } catch {
+          setPolishStatus("failed");
+          setPolishErrorMessage(error instanceof Error ? error.message : "AI 背景生成失败，请稍后重试。");
+          return false;
+        }
+      } else {
+        setPolishStatus("failed");
+        setPolishErrorMessage(error instanceof Error ? error.message : "AI 背景生成失败，请稍后重试。");
+        return false;
+      }
     }
     const updated = markCompositionDraft({ ...composition, polishLayer: layer, polishEnabled: true }, composition);
     const next = { ...current, composition: updated, completedSteps: current.completedSteps.includes("polish") ? current.completedSteps : [...current.completedSteps, "polish"] };
@@ -783,6 +801,8 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
     }
     return true;
   }, [playbackAssets, player, polish]);
+
+  useEffect(() => { generatePolishRef.current = generatePolish; }, [generatePolish]);
 
   const dismissPolishFailure = useCallback(() => {
     setPolishStatus("declined");
@@ -935,6 +955,9 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
   const setCompositionDuration = useCallback((seconds: CompositionDurationSeconds) => {
     player.stop();
     loadedPlanRef.current = null;
+    // 40 秒的背景裁到 30 秒会把模型写好的收尾切掉，听起来像成品其实是残缺的。
+    // 换档位等于换了一首曲子的长度，背景要按新长度重配，而不是机械截断。
+    const hadPolish = Boolean(snapshotRef.current.composition?.polishLayer);
     // 儿童手动选择的声音片段是作品时长的下限，切换档位不能把它剪短。
     setSnapshot((current) => current.composition && durationOptionFitsUserClips(current.composition, seconds) ? {
       ...current,
@@ -947,6 +970,7 @@ export function CompositionRoot({ children }: { children: ReactNode }) {
         current.composition,
       ),
     } : current);
+    if (hadPolish) queueMicrotask(() => { void generatePolishRef.current?.(false, { autoChain: true }); });
   }, [player]);
 
   const saveWork = useCallback(async () => {

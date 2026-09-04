@@ -62,8 +62,8 @@ export class FunMusicPolishGenerator implements PolishGenerationPort {
   }
 
   /** Fun-Music 不可用时走同一条 Plan B，实现见 requestSymbolicPlanLayer。 */
-  fallback(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[]): Promise<AIPolishLayer> {
-    return requestSymbolicPlanLayer(composition, cards, units);
+  fallback(composition: Composition, cards: ConfirmedSoundCard[], units: SoundUnit[], attempt = 0): Promise<AIPolishLayer> {
+    return requestSymbolicPlanLayer(composition, cards, units, attempt);
   }
 }
 

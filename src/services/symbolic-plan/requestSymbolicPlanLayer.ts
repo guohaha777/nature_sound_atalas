@@ -21,6 +21,7 @@ export async function requestSymbolicPlanLayer(
   composition: Composition,
   cards: ConfirmedSoundCard[],
   units: SoundUnit[],
+  attempt = 0,
 ): Promise<AIPolishLayer> {
   const brief = buildMusicPolishBrief(composition, cards, units);
   const direction = deriveMusicPolishDirection(brief);
@@ -36,7 +37,7 @@ export async function requestSymbolicPlanLayer(
     const response = await fetch("/api/music/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brief }),
+      body: JSON.stringify({ brief, attempt }),
     });
     const payload = await response.json().catch(() => null) as unknown;
     if (response.ok) {
@@ -65,7 +66,7 @@ export async function requestSymbolicPlanLayer(
   }
 
   return {
-    id: `${sourceKind === "symbolic_ai" ? "symbolic-ai" : "local-score"}-${composition.revision}`,
+    id: `${sourceKind === "symbolic_ai" ? "symbolic-ai" : "local-score"}-${composition.revision}-${attempt}`,
     compositionRevision: composition.revision,
     sourceKind,
     provider,

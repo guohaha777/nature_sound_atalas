@@ -81,6 +81,20 @@ describe("AceStepPolishGenerator", () => {
       .rejects.toThrow("本地音乐模型没有启动");
   });
 
+  it("gives up on a stalled offline render instead of spinning forever", async () => {
+    // 页面切到后台时浏览器会挂起离线渲染，Promise 永不 resolve。
+    // 这里模拟那个状态：必须抛错让失败对话框出来，而不是一直转进度条。
+    vi.useFakeTimers();
+    renderChildrenMix.mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal("fetch", vi.fn());
+
+    const pending = new AceStepPolishGenerator(() => plan).generate(plan.composition, MOCK_SOUND_CARDS, MOCK_SOUND_UNITS);
+    const assertion = expect(pending).rejects.toThrow("编排渲染超时");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    vi.useRealTimers();
+  });
+
   it("runs the language-model Plan B when ACE-Step is unavailable", async () => {
     // Plan B 的价值就在于它还会联网问语言模型；之前这里断言的是「不发请求」，
     // 正好把「音频模型一挂就掉到机械伴奏」这个 bug 锁住了。
