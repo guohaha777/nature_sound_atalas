@@ -40,3 +40,6 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+
+# 临时演示视频（372MB，超过 GitHub 单文件 100MB 上限，不可入库）
+/public/temp/

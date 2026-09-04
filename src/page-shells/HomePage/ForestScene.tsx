@@ -2,16 +2,21 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { HOME_PAGE_MOCK } from "@/src/mocks/homePageMockData";
 import { ForestSoundMarker } from "./ForestSoundMarker";
 
 const CLOUDS = ["one", "two", "three"] as const;
 const APPLES = ["one", "two", "three"] as const;
+/** 临时：承担视频播放键的那朵云。 */
+const VIDEO_CLOUD = "three";
 
 export function ForestScene() {
   const audioElementsRef = useRef(new Map<string, HTMLAudioElement>());
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const [activeSoundId, setActiveSoundId] = useState<string | null>(null);
+  /** 临时演示视频：把其中一朵云做成播放键。正式项目上线前连同 public/temp 一起删除。 */
+  const [videoOpen, setVideoOpen] = useState(false);
 
   useEffect(() => () => {
     audioElementsRef.current.forEach((audio) => {
@@ -67,7 +72,19 @@ export function ForestScene() {
     <div className="forest-home__art">
       <span className="forest-home__sun" aria-hidden="true" />
 
-      {CLOUDS.map((cloud) => (
+      {CLOUDS.map((cloud) => cloud === VIDEO_CLOUD ? (
+        // 临时演示入口：这朵云是可点的，其余两朵仍是纯装饰。
+        <button
+          className={`forest-home__cloud forest-home__cloud--${cloud} forest-home__cloud--playable`}
+          onClick={() => setVideoOpen(true)}
+          aria-label="播放项目介绍视频"
+          key={cloud}
+          type="button"
+        >
+          <img src="/cloud-transparent.svg" width="1024" height="1024" alt="" aria-hidden="true" />
+          <span className="forest-home__cloud-play" aria-hidden="true">▶</span>
+        </button>
+      ) : (
         <img
           className={`forest-home__cloud forest-home__cloud--${cloud}`}
           src="/cloud-transparent.svg"
@@ -118,6 +135,25 @@ export function ForestScene() {
           />
         </span>
       ))}
+
+      {/*
+        临时演示视频弹窗。必须挂到 body，不能留在这一层：
+        .forest-home__art 是 pointer-events:none 且 z-index:1 自成层叠上下文，
+        留在里面的话弹窗既点不动、又会被页面上层元素盖住。
+        正式项目删除时，连同上面的 VIDEO_CLOUD 分支和 public/temp 一起去掉。
+      */}
+      {videoOpen && createPortal(
+        <div className="home-video-backdrop">
+          {/* 点背景关闭：用按钮承载，键盘和读屏都能触达，不给非交互元素挂点击。 */}
+          <button className="home-video-dismiss" onClick={() => setVideoOpen(false)} aria-label="关闭视频" type="button" />
+          <div className="home-video-dialog" role="dialog" aria-modal="true" aria-label="项目介绍视频">
+            <button className="home-video-close" onClick={() => setVideoOpen(false)} aria-label="关闭视频" type="button">×</button>
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption -- 临时演示片，正式项目会补字幕轨 */}
+            <video src="/temp/intro-video.mp4" controls autoPlay playsInline preload="metadata" />
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

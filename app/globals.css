@@ -65,6 +65,23 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .forest-home__cloud--one { width: clamp(230px, 20vw, 360px); left: -2%; top: -5%; }
 .forest-home__cloud--two { width: clamp(170px, 15vw, 260px); left: 17%; top: 1%; }
 .forest-home__cloud--three { width: clamp(140px, 12vw, 220px); right: 31%; top: 7%; }
+
+/* --- 临时：首页演示视频入口。正式项目删除本段、ForestScene 里的 VIDEO_CLOUD 分支与 public/temp --- */
+/* .forest-home__art 整层是 pointer-events:none，装饰不挡界面；
+   要能点，必须像 .forest-sound 那样自己把指针事件收回来。 */
+.forest-home__cloud--playable { padding: 0; display: block; border: 0; background: none; cursor: pointer; opacity: 1; pointer-events: auto; }
+.forest-home__cloud--playable img { width: 100%; height: auto; opacity: .28; filter: saturate(.72); transition: opacity .2s; }
+.forest-home__cloud--playable:hover img, .forest-home__cloud--playable:focus-visible img { opacity: .5; }
+.forest-home__cloud-play { position: absolute; z-index: 2; left: 50%; top: 52%; display: grid; place-items: center; width: 34px; height: 34px; transform: translate(-50%, -50%); border-radius: 50%; background: var(--paper); color: var(--accent); box-shadow: 0 6px 14px -8px rgba(0,0,0,.5); font-size: 13px; padding-left: 2px; transition: transform .2s; }
+.forest-home__cloud--playable:hover .forest-home__cloud-play { transform: translate(-50%, -50%) scale(1.12); }
+.home-video-backdrop { position: fixed; inset: 0; z-index: 9999; pointer-events: auto; display: grid; place-items: center; padding: 24px; background: rgba(32,31,27,.72); backdrop-filter: blur(5px); }
+.home-video-dismiss { position: absolute; inset: 0; z-index: 0; padding: 0; border: 0; background: none; cursor: pointer; }
+/* 这支演示片是竖屏 1080×1440，用宽盒子装会留两条黑边。
+   让盒子收缩到视频本身的宽度：高度由视口决定，宽度跟着比例走。 */
+.home-video-dialog { position: relative; z-index: 1; max-width: 100%; border: 1px solid var(--ink); background: var(--paper); box-shadow: 10px 10px 0 rgba(32,31,27,.18); line-height: 0; }
+.home-video-dialog video { max-width: 100%; max-height: 82vh; width: auto; height: auto; display: block; background: #000; }
+.home-video-close { position: absolute; z-index: 3; right: 8px; top: 8px; width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: 50%; background: var(--paper); cursor: pointer; font-size: 18px; line-height: 1; }
+.home-video-close:hover { color: var(--paper); background: var(--accent-ink); }
 .forest-home__woodland, .forest-home__left-grove { aspect-ratio: 1; position: absolute; }
 .forest-home__woodland { width: clamp(820px, 64vw, 1160px); right: -7vw; bottom: -9rem; z-index: 4; transform-origin: 55% 86%; }
 .forest-home__left-grove { width: clamp(500px, 40vw, 620px); left: -210px; bottom: -85px; z-index: 5; }
